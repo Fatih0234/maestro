@@ -104,7 +104,7 @@ func (m *Manager) Create(ctx context.Context, issue types.Issue) (string, error)
 	}
 
 	// Create git worktree
-	branchName := m.branchPrefix + issue.ID
+	branchName := m.branchPrefix + sanitizeBranchName(issue.ID)
 	_, err := m.runGit(ctx, "worktree", "add", workspacePath, "-b", branchName)
 	if err != nil {
 		// Fallback: try adding without creating a new branch
@@ -148,8 +148,18 @@ func (m *Manager) Cleanup(ctx context.Context, issueID string) error {
 	// Remove git worktree
 	output, err := m.runGit(ctx, "worktree", "remove", workspacePath, "--force")
 	if err != nil {
-		// Ignore if not a worktree
-		if !strings.Contains(output, "is not a working tree") {
+		// Check if it's "not a working tree" - this happens for orphaned worktrees
+		// that exist on disk but aren't tracked by git
+		if strings.Contains(output, "is not a working tree") {
+			// Best-effort directory removal for orphaned worktrees
+			if rmErr := os.RemoveAll(workspacePath); rmErr != nil {
+				return fmt.Errorf(
+					"remove orphaned worktree for issue %s: git failed: %w; directory removal failed: %v",
+					issueID, err, rmErr,
+				)
+			}
+			// Directory removed successfully
+		} else {
 			return fmt.Errorf("remove git worktree for issue %s: %w", issueID, err)
 		}
 	}
@@ -216,9 +226,39 @@ func (m *Manager) BaseDir() string {
 	return m.baseDir
 }
 
+// sanitizeBranchName sanitizes an issue ID for use in a git branch name.
+// Only allows [a-zA-Z0-9_/-], replacing all other characters with hyphens.
+func sanitizeBranchName(id string) string {
+	var result strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '/' || r == '-' {
+			result.WriteRune(r)
+		} else {
+			result.WriteRune('-')
+		}
+	}
+	return result.String()
+}
+
+// sanitizeFileName sanitizes a string for use in a file or directory name.
+// Only allows [a-zA-Z0-9_.-], replacing all other characters with hyphens.
+func sanitizeFileName(name string) string {
+	var result strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '.' || r == '-' {
+			result.WriteRune(r)
+		} else {
+			result.WriteRune('-')
+		}
+	}
+	return result.String()
+}
+
 // workspacePath returns the full path to a workspace directory.
 func (m *Manager) workspacePath(issueID string) string {
-	return filepath.Join(m.baseDir, m.worktreeDir, issueID)
+	return filepath.Join(m.baseDir, m.worktreeDir, sanitizeFileName(issueID))
 }
 
 // lockIssue acquires an exclusive lock for the given issue.

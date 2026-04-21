@@ -373,3 +373,121 @@ func trimNewline(s string) string {
 	}
 	return s
 }
+
+func TestSanitizeBranchName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"CB-1", "CB-1"},
+		{"CB_1", "CB_1"},
+		{"CB/1", "CB/1"}, // Forward slash is allowed (creates subdirectory)
+		{"CB-1-extra", "CB-1-extra"},
+		{"CB 1", "CB-1"},
+		{"CB@1", "CB-1"},  // @ replaced with hyphen (could be ref syntax)
+		{"CB#1", "CB-1"},  // # replaced with hyphen (comment character)
+		{"CB!1", "CB-1"},
+		{"CB:1", "CB-1"},
+		{"CB's Issue", "CB-s-Issue"},
+		{"CB-1 (v2)", "CB-1--v2-"},
+		{"ABC123xyz", "ABC123xyz"},
+		{"UPPERCASE", "UPPERCASE"},
+		{"with spaces", "with-spaces"},
+		{"with\ttabs", "with-tabs"}, // tabs become single hyphen
+		{"with\nnewlines", "with-newlines"}, // newlines become single hyphen
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			result := sanitizeBranchName(tc.input)
+			if result != tc.expected {
+				t.Errorf("sanitizeBranchName(%q) = %q, want %q", tc.input, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestSanitizeFileName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"CB-1", "CB-1"},
+		{"CB_1", "CB_1"},
+		{"CB.1", "CB.1"},
+		{"CB 1", "CB-1"},
+		{"CB@1", "CB-1"},
+		{"CB:1", "CB-1"},
+		{"CB's Issue", "CB-s-Issue"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			result := sanitizeFileName(tc.input)
+			if result != tc.expected {
+				t.Errorf("sanitizeFileName(%q) = %q, want %q", tc.input, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestManager_Create_WithSpecialChars(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
+
+	manager := New(Config{
+		BaseDir:      tmpDir,
+		WorktreeDir:  "workspaces",
+		BranchPrefix: "opencode/",
+	})
+
+	issue := types.Issue{
+		ID:          "CB-1 (special/chars)",
+		Identifier:  "CB-1",
+		Title:       "Test Issue with Special Characters",
+		Description: "Test description",
+	}
+
+	workspacePath, err := manager.Create(context.Background(), issue)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Verify directory was created with sanitized name
+	// The directory name should be sanitized but the git branch uses sanitizeBranchName
+	expectedDir := filepath.Join(tmpDir, "workspaces", "CB-1--special-chars-")
+	if workspacePath != expectedDir {
+		t.Errorf("expected workspace path %q, got %q", expectedDir, workspacePath)
+	}
+
+	// Verify directory exists
+	if _, err := os.Stat(workspacePath); err != nil {
+		t.Fatalf("workspace directory not created: %v", err)
+	}
+
+	// Verify branch was created with sanitized name
+	branchName, err := getCurrentBranch(workspacePath)
+	if err != nil {
+		t.Fatalf("getCurrentBranch failed: %v", err)
+	}
+
+	// Forward slash is preserved in branch names (creates subdirectory-like structure)
+	expectedBranch := "opencode/CB-1--special/chars-"
+	if branchName != expectedBranch {
+		t.Errorf("expected branch name %q, got %q", expectedBranch, branchName)
+	}
+}
+
+func TestManager_Cleanup_NonExistentWorkspaceDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
+
+	manager := New(Config{
+		BaseDir: tmpDir,
+	})
+
+	// Test that Cleanup handles non-existent directories gracefully
+	if err := manager.Cleanup(context.Background(), "NONEXISTENT"); err != nil {
+		t.Fatalf("Cleanup should succeed for non-existent workspace: %v", err)
+	}
+}

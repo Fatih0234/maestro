@@ -202,9 +202,15 @@ func (c *Config) Validate() error {
 		if c.OpenCode == nil {
 			return fmt.Errorf("opencode config is required when agent.type is opencode")
 		}
+		if c.OpenCode.BinaryPath == "" {
+			return fmt.Errorf("opencode.binary_path is required")
+		}
 	case "codex":
 		if c.Codex == nil {
 			return fmt.Errorf("codex config is required when agent.type is codex")
+		}
+		if c.Codex.BinaryPath == "" {
+			return fmt.Errorf("codex.binary_path is required")
 		}
 	}
 

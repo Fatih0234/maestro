@@ -254,6 +254,34 @@ func TestValidate_MissingOpenCodeConfig(t *testing.T) {
 	}
 }
 
+func TestValidate_EmptyOpenCodeBinaryPath(t *testing.T) {
+	cfg := &Config{
+		MaxConcurrency: 3,
+		PollIntervalMs: 30000,
+		Tracker:        TrackerConfig{Type: "internal"},
+		Agent:          AgentConfig{Type: "opencode"},
+		OpenCode:       &OpenCodeConfig{BinaryPath: ""}, // Empty path
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Error("Expected error for empty opencode binary_path, got nil")
+	}
+}
+
+func TestValidate_EmptyCodexBinaryPath(t *testing.T) {
+	cfg := &Config{
+		MaxConcurrency: 3,
+		PollIntervalMs: 30000,
+		Tracker:        TrackerConfig{Type: "internal"},
+		Agent:          AgentConfig{Type: "codex"},
+		Codex:          &CodexConfig{BinaryPath: ""}, // Empty path
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Error("Expected error for empty codex binary_path, got nil")
+	}
+}
+
 func TestResolvePaths(t *testing.T) {
 	cfg := &Config{
 		Workspace: WorkspaceConfig{
