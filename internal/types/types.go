@@ -128,6 +128,10 @@ type AgentProcess struct {
 	SessionID string          // Agent session identifier
 	Events    chan AgentEvent // Streams events from the agent
 	Done      chan error      // Closed when the agent finishes
+
+	// ServerURL is used internally by OpenCodeRunner to route requests.
+	// This is set by the runner when creating the process.
+	ServerURL string
 }
 
 // AgentEvent represents something that happened during execution
