@@ -85,6 +85,7 @@ type Issue struct {
 	State       IssueState // Current state
 	Labels      []string   // Tags for categorization
 	URL         string     // Link to the issue (empty for local tracker)
+	RetryAfter  *time.Time // When to retry (for retry_queued state)
 	CreatedAt   time.Time  // When issue was created
 	UpdatedAt   time.Time  // Last modification
 }
@@ -138,6 +139,8 @@ type AgentEvent struct {
 // IssueTracker defines the interface for issue tracking systems.
 type IssueTracker interface {
 	// FetchIssues returns all issues that need processing.
+	// For trackers that support retry, this filters out issues that are
+	// waiting for their retry_after time to pass.
 	FetchIssues() ([]Issue, error)
 	// ClaimIssue marks an issue as in progress
 	ClaimIssue(id string) (Issue, error)
@@ -147,4 +150,7 @@ type IssueTracker interface {
 	GetIssue(id string) (Issue, error)
 	// UpdateIssueState updates an issue's state
 	UpdateIssueState(id string, state IssueState) (Issue, error)
+	// SetRetryQueue marks an issue as waiting for retry. Not all trackers
+	// may support this; those that don't should return an error.
+	SetRetryQueue(id string, retryAt time.Time) (Issue, error)
 }

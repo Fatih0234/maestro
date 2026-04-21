@@ -17,16 +17,17 @@ import (
 
 // Board states (stored in JSON files)
 const (
-	StateTodo       = "todo"
-	StateInProgress = "in_progress"
-	StateDone       = "done"
+	StateTodo        = "todo"
+	StateInProgress  = "in_progress"
+	StateDone        = "done"
+	StateRetryQueued = "retry_queued" // Issue waiting for backoff retry
 )
 
 // Default paths
 const (
 	DefaultBoardDir    = ".contrabass/board"
 	DefaultIssuePrefix = "CB"
-	SchemaVersion     = "1"
+	SchemaVersion     = "2" // v2: added retry_queued board state
 )
 
 // Manifest represents the board metadata file.
@@ -40,16 +41,17 @@ type Manifest struct {
 
 // Issue represents a local board issue stored as JSON.
 type Issue struct {
-	ID          string    `json:"id"`
-	Identifier  string    `json:"identifier"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	State       string    `json:"state"`
-	Labels      []string  `json:"labels,omitempty"`
-	URL         string    `json:"url,omitempty"`
-	ClaimedBy   string    `json:"claimed_by,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID           string     `json:"id"`
+	Identifier   string     `json:"identifier"`
+	Title        string     `json:"title"`
+	Description  string     `json:"description"`
+	State        string     `json:"state"`
+	Labels       []string   `json:"labels,omitempty"`
+	URL          string     `json:"url,omitempty"`
+	ClaimedBy    string     `json:"claimed_by,omitempty"`
+	RetryAfter   *time.Time `json:"retry_after,omitempty"` // When to retry (for retry_queued state)
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 // Config holds configuration for the local tracker.
@@ -146,7 +148,8 @@ func (t *LocalTracker) ensureBoardLocked() error {
 	return writeJSONAtomic(manifestPath, manifest)
 }
 
-// FetchIssues returns all non-done issues.
+// FetchIssues returns all non-done issues that are ready to be processed.
+// Issues in retry_queued state are only returned if their retry_after time has passed.
 func (t *LocalTracker) FetchIssues() ([]types.Issue, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -161,6 +164,7 @@ func (t *LocalTracker) FetchIssues() ([]types.Issue, error) {
 	}
 
 	issues := make([]types.Issue, 0)
+	now := time.Now()
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -174,6 +178,13 @@ func (t *LocalTracker) FetchIssues() ([]types.Issue, error) {
 		// Skip done issues
 		if issue.State == StateDone {
 			continue
+		}
+
+		// Skip retry_queued issues that haven't reached their retry time
+		if issue.State == StateRetryQueued {
+			if issue.RetryAfter != nil && now.Before(*issue.RetryAfter) {
+				continue
+			}
 		}
 
 		issues = append(issues, t.toTypesIssue(issue))
@@ -280,6 +291,10 @@ func (t *LocalTracker) UpdateIssueState(id string, state types.IssueState) (type
 	} else if issue.State != StateInProgress {
 		issue.ClaimedBy = ""
 	}
+	// Clear retry_after when leaving retry_queued state
+	if state != types.StateRetryQueued {
+		issue.RetryAfter = nil
+	}
 	issue.UpdatedAt = time.Now().UTC()
 
 	if err := writeJSONAtomic(t.issuePath(id), issue); err != nil {
@@ -371,9 +386,37 @@ func (t *LocalTracker) toTypesIssue(issue Issue) types.Issue {
 		State:       toIssueState(issue.State),
 		Labels:      slices.Clone(issue.Labels),
 		URL:         issue.URL,
+		RetryAfter:  issue.RetryAfter,
 		CreatedAt:   issue.CreatedAt,
 		UpdatedAt:   issue.UpdatedAt,
 	}
+}
+
+// SetRetryQueue marks an issue as retry_queued with a retry_after timestamp.
+// This is the preferred way to queue an issue for retry instead of using UpdateIssueState.
+func (t *LocalTracker) SetRetryQueue(id string, retryAt time.Time) (types.Issue, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if err := t.ensureBoardLocked(); err != nil {
+		return types.Issue{}, err
+	}
+
+	issue, err := t.loadIssueLocked(id)
+	if err != nil {
+		return types.Issue{}, err
+	}
+
+	issue.State = StateRetryQueued
+	issue.RetryAfter = &retryAt
+	issue.ClaimedBy = ""
+	issue.UpdatedAt = time.Now().UTC()
+
+	if err := writeJSONAtomic(t.issuePath(id), issue); err != nil {
+		return types.Issue{}, err
+	}
+
+	return t.toTypesIssue(issue), nil
 }
 
 // toBoardState converts types.IssueState to board state string.
@@ -382,7 +425,7 @@ func toBoardState(state types.IssueState) string {
 	case types.StateClaimed, types.StateRunning:
 		return StateInProgress
 	case types.StateRetryQueued:
-		return StateTodo // Retry uses todo state
+		return StateRetryQueued // Preserve retry_queued state
 	case types.StateReleased:
 		return StateDone
 	default:
@@ -395,6 +438,8 @@ func toIssueState(state string) types.IssueState {
 	switch state {
 	case StateInProgress:
 		return types.StateRunning
+	case StateRetryQueued:
+		return types.StateRetryQueued
 	case StateDone:
 		return types.StateReleased
 	default:

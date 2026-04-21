@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
 )
@@ -368,7 +369,7 @@ func TestLocalTracker_BoardStateConversions(t *testing.T) {
 		{types.StateUnclaimed, StateTodo},
 		{types.StateClaimed, StateInProgress},
 		{types.StateRunning, StateInProgress},
-		{types.StateRetryQueued, StateTodo},
+		{types.StateRetryQueued, StateRetryQueued},
 		{types.StateReleased, StateDone},
 	}
 
@@ -379,5 +380,160 @@ func TestLocalTracker_BoardStateConversions(t *testing.T) {
 				t.Errorf("toBoardState(%v) = %q, want %q", tc.issueState, result, tc.expectedBoard)
 			}
 		})
+	}
+}
+
+func TestLocalTracker_RetryQueuedState(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tracker := New(Config{
+		BoardDir: tmpDir,
+	})
+
+	// Create an issue
+	issue, err := tracker.CreateIssue("Retry Test", "Description", nil)
+	if err != nil {
+		t.Fatalf("CreateIssue failed: %v", err)
+	}
+
+	// Set as retry queued with a future time
+	futureTime := time.Now().Add(1 * time.Hour)
+	updated, err := tracker.SetRetryQueue(issue.ID, futureTime)
+	if err != nil {
+		t.Fatalf("SetRetryQueue failed: %v", err)
+	}
+
+	if updated.State != types.StateRetryQueued {
+		t.Errorf("expected state retry_queued, got %v", updated.State)
+	}
+
+	// FetchIssues should NOT include retry_queued issues that haven't reached their time
+	issues, err := tracker.FetchIssues()
+	if err != nil {
+		t.Fatalf("FetchIssues failed: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues (retry not due), got %d", len(issues))
+	}
+
+	// Set as retry queued with a past time
+	pastTime := time.Now().Add(-1 * time.Hour)
+	updated, err = tracker.SetRetryQueue(issue.ID, pastTime)
+	if err != nil {
+		t.Fatalf("SetRetryQueue failed: %v", err)
+	}
+
+	if updated.State != types.StateRetryQueued {
+		t.Errorf("expected state retry_queued, got %v", updated.State)
+	}
+
+	// FetchIssues should now include the issue
+	issues, err = tracker.FetchIssues()
+	if err != nil {
+		t.Fatalf("FetchIssues failed: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Errorf("expected 1 issue (retry past), got %d", len(issues))
+	}
+
+	// Claiming should clear the retry_queued state
+	claimed, err := tracker.ClaimIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("ClaimIssue failed: %v", err)
+	}
+
+	if claimed.State != types.StateRunning {
+		t.Errorf("expected state running after claim, got %v", claimed.State)
+	}
+}
+
+func TestLocalTracker_SetRetryQueue(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tracker := New(Config{
+		BoardDir: tmpDir,
+	})
+
+	// Create an issue
+	issue, err := tracker.CreateIssue("Retry Queue Test", "Description", nil)
+	if err != nil {
+		t.Fatalf("CreateIssue failed: %v", err)
+	}
+
+	// Claim it first
+	_, err = tracker.ClaimIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("ClaimIssue failed: %v", err)
+	}
+
+	// Set as retry queued
+	retryTime := time.Now().Add(30 * time.Second)
+	requeued, err := tracker.SetRetryQueue(issue.ID, retryTime)
+	if err != nil {
+		t.Fatalf("SetRetryQueue failed: %v", err)
+	}
+
+	if requeued.State != types.StateRetryQueued {
+		t.Errorf("expected state retry_queued, got %v", requeued.State)
+	}
+
+	// Verify the retry_after time is preserved
+	if requeued.RetryAfter == nil {
+		t.Fatal("expected RetryAfter to be set")
+	}
+
+	// Time should be approximately correct (within 1 second)
+	diff := requeued.RetryAfter.Sub(retryTime)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 1*time.Second {
+		t.Errorf("RetryAfter time mismatch: expected ~%v, got %v", retryTime, *requeued.RetryAfter)
+	}
+
+	// Verify file on disk
+	fetched, err := tracker.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue failed: %v", err)
+	}
+
+	if fetched.State != types.StateRetryQueued {
+		t.Errorf("expected persisted state retry_queued, got %v", fetched.State)
+	}
+}
+
+func TestLocalTracker_UpdateIssueState_ClearsRetryAfter(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tracker := New(Config{
+		BoardDir: tmpDir,
+	})
+
+	// Create and set retry queue
+	issue, err := tracker.CreateIssue("Clear Retry Test", "Description", nil)
+	if err != nil {
+		t.Fatalf("CreateIssue failed: %v", err)
+	}
+
+	retryTime := time.Now().Add(1 * time.Hour)
+	_, err = tracker.SetRetryQueue(issue.ID, retryTime)
+	if err != nil {
+		t.Fatalf("SetRetryQueue failed: %v", err)
+	}
+
+	// Mark as done (StateReleased)
+	_, err = tracker.UpdateIssueState(issue.ID, types.StateReleased)
+	if err != nil {
+		t.Fatalf("UpdateIssueState failed: %v", err)
+	}
+
+	// Get issue and verify RetryAfter is cleared
+	fetched, err := tracker.GetIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue failed: %v", err)
+	}
+
+	if fetched.RetryAfter != nil {
+		t.Error("expected RetryAfter to be cleared after state change")
 	}
 }
