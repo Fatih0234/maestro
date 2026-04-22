@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fatihkarahan/contrabass-pi/internal/agent"
@@ -26,9 +27,15 @@ type Orchestrator struct {
 	Backoff     *BackoffManager
 
 	// Internal
-	ctx        context.Context
-	cancel     context.CancelFunc
+	ctx       context.Context
+	cancel    context.CancelFunc
 	promptTmpl string
+
+	// Goroutine tracking for graceful shutdown
+	wg     sync.WaitGroup
+	mu     sync.Mutex // protects running map
+	running map[string]context.CancelFunc // issueID -> cancel func for that run's context
+	closed  bool
 }
 
 // New creates a new Orchestrator.
@@ -52,6 +59,7 @@ func New(cfg *config.Config, tr types.IssueTracker, ws workspace.Manager, runner
 		ctx:         ctx,
 		cancel:      cancel,
 		promptTmpl:  cfg.Content,
+		running:     make(map[string]context.CancelFunc),
 	}
 }
 
@@ -119,44 +127,64 @@ func (o *Orchestrator) reconcileRunning() {
 
 // handleTimeout handles a run that has exceeded the agent timeout.
 func (o *Orchestrator) handleTimeout(run *RunState, elapsed time.Duration) {
+	issueID := run.Issue.ID
+
+	// Cancel the run's context
+	o.mu.Lock()
+	if cancel, ok := o.running[issueID]; ok {
+		cancel()
+		delete(o.running, issueID)
+	}
+	o.mu.Unlock()
+
 	// Stop agent process
 	if run.Process != nil {
 		_ = o.AgentRunner.Stop(run.Process)
 	}
 
 	// Emit timeout event
-	o.emit(EventTimeoutDetected, run.Issue.ID, TimeoutDetectedPayload{
-		IssueID: run.Issue.ID,
+	o.emit(EventTimeoutDetected, issueID, TimeoutDetectedPayload{
+		IssueID: issueID,
 		Elapsed: elapsed,
 	})
 
 	// Enqueue backoff
 	attempt := run.Attempt + 1
-	entry := o.Backoff.Enqueue(run.Issue.ID, attempt, fmt.Sprintf("timeout after %v", elapsed))
+	entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("timeout after %v", elapsed))
 
-	o.emit(EventBackoffQueued, run.Issue.ID, BackoffQueuedPayload{
-		IssueID: run.Issue.ID,
+	o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
+		IssueID: issueID,
 		Attempt: attempt,
 		RetryAt: entry.RetryAt,
 	})
 
 	// Update phase to timed out
-	o.State.UpdatePhase(run.Issue.ID, types.PhaseTimedOut)
+	o.State.UpdatePhase(issueID, types.PhaseTimedOut)
 
 	// Remove from active state (will be retried via backoff)
-	o.State.Remove(run.Issue.ID)
+	o.State.Remove(issueID)
 }
 
 // handleStall handles a run that has stalled (no recent events).
 func (o *Orchestrator) handleStall(run *RunState, lastEventAge time.Duration) {
+	issueID := run.Issue.ID
+
+	// Cancel the run's context
+	o.mu.Lock()
+	if cancel, ok := o.running[issueID]; ok {
+		cancel()
+		delete(o.running, issueID)
+	}
+	o.mu.Unlock()
+
 	// Stop agent process
 	if run.Process != nil {
 		_ = o.AgentRunner.Stop(run.Process)
 	}
 
 	// Emit stall event
-	o.emit(EventStallDetected, run.Issue.ID, StallDetectedPayload{
-		IssueID:     run.Issue.ID,
+	o.emit(EventStallDetected, issueID, StallDetectedPayload{
+		IssueID:     issueID,
 		Reason:      "stall",
 		Detail:      fmt.Sprintf("no event received for %v", lastEventAge),
 		LastEventAge: lastEventAge,
@@ -164,26 +192,28 @@ func (o *Orchestrator) handleStall(run *RunState, lastEventAge time.Duration) {
 
 	// Enqueue backoff
 	attempt := run.Attempt + 1
-	entry := o.Backoff.Enqueue(run.Issue.ID, attempt, fmt.Sprintf("stall: no event for %v", lastEventAge))
+	entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("stall: no event for %v", lastEventAge))
 
-	o.emit(EventBackoffQueued, run.Issue.ID, BackoffQueuedPayload{
-		IssueID: run.Issue.ID,
+	o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
+		IssueID: issueID,
 		Attempt: attempt,
 		RetryAt: entry.RetryAt,
 	})
 
 	// Update phase to stalled
-	o.State.UpdatePhase(run.Issue.ID, types.PhaseStalled)
+	o.State.UpdatePhase(issueID, types.PhaseStalled)
 
 	// Remove from active state (will be retried via backoff)
-	o.State.Remove(run.Issue.ID)
+	o.State.Remove(issueID)
 }
 
 // dispatchBackoff retries ready backoff entries.
 func (o *Orchestrator) dispatchBackoff() {
 	for _, entry := range o.Backoff.Ready() {
-		// Skip if at capacity
+		// Skip if at capacity - re-add entry to backoff to preserve it
 		if o.Config.MaxConcurrency > 0 && o.State.Len() >= o.Config.MaxConcurrency {
+			// Re-add with same attempt to preserve retry position
+			o.Backoff.Enqueue(entry.IssueID, entry.Attempt, entry.Error)
 			return
 		}
 
@@ -245,49 +275,77 @@ func (o *Orchestrator) dispatchReady() {
 
 // startRun starts a run for an issue with the given attempt number.
 func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
+	// Create a cancellable context for this run
+	runCtx, runCancel := context.WithCancel(o.ctx)
+	issueID := issue.ID
+
+	// Track the cancel func
+	o.mu.Lock()
+	if o.closed {
+		runCancel()
+		o.mu.Unlock()
+		return
+	}
+	o.running[issueID] = runCancel
+	o.mu.Unlock()
+
 	// 1. Create workspace
-	ctx := o.ctx
-	wsPath, err := o.Workspace.Create(ctx, issue)
+	wsPath, err := o.Workspace.Create(runCtx, issue)
 	if err != nil {
+		runCancel()
+		o.removeRunning(issueID)
 		o.handleStartError(issue, attempt, err, "workspace creation failed")
 		return
 	}
 
-	o.State.UpdatePhase(issue.ID, types.PhasePreparingWorkspace)
-	o.emit(EventWorkspaceCreated, issue.ID, WorkspaceCreatedPayload{
-		IssueID: issue.ID,
+	o.State.UpdatePhase(issueID, types.PhasePreparingWorkspace)
+	o.emit(EventWorkspaceCreated, issueID, WorkspaceCreatedPayload{
+		IssueID: issueID,
 		Path:    wsPath,
 	})
 
 	// 2. Build prompt from template
-	o.State.UpdatePhase(issue.ID, types.PhaseBuildingPrompt)
+	o.State.UpdatePhase(issueID, types.PhaseBuildingPrompt)
 	prompt := o.buildPrompt(issue)
-	o.emit(EventPromptBuilt, issue.ID, PromptBuiltPayload{
-		IssueID: issue.ID,
+	o.emit(EventPromptBuilt, issueID, PromptBuiltPayload{
+		IssueID: issueID,
 		Length:  len(prompt),
 	})
 
 	// 3. Start agent
-	o.State.UpdatePhase(issue.ID, types.PhaseLaunchingAgentProcess)
-	proc, err := o.AgentRunner.Start(ctx, issue, wsPath, prompt)
+	o.State.UpdatePhase(issueID, types.PhaseLaunchingAgentProcess)
+	proc, err := o.AgentRunner.Start(runCtx, issue, wsPath, prompt)
 	if err != nil {
+		runCancel()
+		o.removeRunning(issueID)
 		o.handleStartError(issue, attempt, err, "agent start failed")
 		return
 	}
 
 	// 4. Add to state
-	o.State.Add(issue.ID, issue, attempt, proc)
-	o.State.UpdatePhase(issue.ID, types.PhaseInitializingSession)
+	o.State.Add(issueID, issue, attempt, proc)
+	o.State.UpdatePhase(issueID, types.PhaseInitializingSession)
 
 	// 5. Emit agent started
-	o.emit(EventAgentStarted, issue.ID, AgentStartedPayload{
-		IssueID:   issue.ID,
+	o.emit(EventAgentStarted, issueID, AgentStartedPayload{
+		IssueID:   issueID,
 		PID:       proc.PID,
 		SessionID: proc.SessionID,
 	})
 
 	// 6. Spawn goroutine to monitor this agent
-	go o.monitorAgent(issue.ID, proc)
+	o.wg.Add(1)
+	go func() {
+		defer o.wg.Done()
+		o.monitorAgent(issueID, proc, runCancel)
+	}()
+}
+
+// removeRunning removes the cancel func for an issue from the running map.
+func (o *Orchestrator) removeRunning(issueID string) {
+	o.mu.Lock()
+	delete(o.running, issueID)
+	o.mu.Unlock()
 }
 
 // handleStartError handles errors during startRun.
@@ -335,11 +393,13 @@ func (o *Orchestrator) buildPrompt(issue types.Issue) string {
 }
 
 // monitorAgent monitors an agent process and handles its events.
-func (o *Orchestrator) monitorAgent(issueID string, proc *types.AgentProcess) {
+func (o *Orchestrator) monitorAgent(issueID string, proc *types.AgentProcess, runCancel context.CancelFunc) {
 	defer func() {
 		if r := recover(); r != nil {
-			// Channel closed, process done
+			// Channel closed or panic
 		}
+		runCancel()
+		o.removeRunning(issueID)
 	}()
 
 	for {
@@ -459,10 +519,32 @@ func (o *Orchestrator) emit(eventType, issueID string, payload interface{}) {
 
 // shutdown gracefully shuts down the orchestrator.
 func (o *Orchestrator) shutdown() error {
-	// Cancel context
+	o.mu.Lock()
+	if o.closed {
+		o.mu.Unlock()
+		return nil
+	}
+	o.closed = true
+	o.mu.Unlock()
+
+	// Cancel main context - signals all run contexts
 	o.cancel()
 
-	// Stop all running agents
+	// Wait for all monitorAgent goroutines to finish
+	done := make(chan struct{})
+	go func() {
+		o.wg.Wait()
+		close(done)
+	}()
+
+	// Give goroutines a moment to clean up
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		// Timeout waiting, force stop agents
+	}
+
+	// Stop all remaining agent processes
 	for _, run := range o.State.GetAll() {
 		if run.Process != nil {
 			_ = o.AgentRunner.Stop(run.Process)
@@ -480,7 +562,12 @@ func (o *Orchestrator) shutdown() error {
 
 // Stop stops the orchestrator.
 func (o *Orchestrator) Stop() {
-	o.cancel()
+	o.mu.Lock()
+	if !o.closed {
+		o.closed = true
+		o.cancel()
+	}
+	o.mu.Unlock()
 }
 
 // extractTextContent extracts text content from an agent event.
