@@ -31,7 +31,9 @@ Labels: {{ issue.labels }}
 
 ## Instructions
 1. Understand the issue above
-2. Implement the solution in the project at `/Volumes/T7/projects/contrabass-snake`
-3. **IMPORTANT: Commit your changes before finishing**
-   - Run: `git add . && git commit -m "feat({{ issue.id }}): {{ issue.title }}"`
-4. Verify your work is committed with `git log --oneline -1`
+2. Implement the solution in this issue worktree (not the parent checkout)
+3. Leave your implementation **ready for human review** in this issue worktree
+   - Do **not** merge into `main`
+   - Do **not** delete or clean up the worktree
+   - A commit is optional; if created, keep it scoped to this issue branch
+4. Finish with a concise summary of what changed and how to verify it manually
