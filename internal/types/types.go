@@ -158,3 +158,12 @@ type IssueTracker interface {
 	// may support this; those that don't should return an error.
 	SetRetryQueue(id string, retryAt time.Time) (Issue, error)
 }
+
+// OrchestratorEvent represents a high-level event in the orchestrator lifecycle.
+// This is distinct from AgentEvent which represents low-level agent events.
+type OrchestratorEvent struct {
+	Type      string
+	IssueID   string
+	Timestamp time.Time
+	Payload   interface{}
+}
