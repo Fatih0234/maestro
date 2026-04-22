@@ -102,9 +102,14 @@ workspace:
 | `opencode.binary_path` | string | opencode serve | OpenCode binary |
 | `opencode.port` | int | 0 | Server port (0 = auto) |
 | `opencode.password` | string | "" | Server password |
-| `opencode.model` | string | minimax-coding-plan/MiniMax-M2.7 | Model in "provider/model" format. Note: requires user to have the model configured in their opencode profile (~/.config/opencode/profiles/auto/opencode.jsonc) |
+| `opencode.profile` | string | "" | Profile name (e.g., "ws", "omo-power") - maps to `~/.config/opencode/profiles/<profile>/opencode.jsonc` |
+| `opencode.agent` | string | "" | Default agent (e.g., "scribe", "build", "plan", "explore", "coder") |
+| `opencode.config_dir` | string | "" | Optional custom .opencode directory |
+| `opencode.model` | string | "" | **Deprecated** - model is now set in profile config |
 | `workspace.base_dir` | string | . | Workspace root |
 | `workspace.branch_prefix` | string | opencode/ | Branch name prefix |
+
+> **Note on model:** The `opencode.model` field is deprecated. Model is now set via the profile config (`~/.config/opencode/profiles/<profile>/opencode.jsonc`). Use `opencode.profile` to select a profile containing your desired model.
 
 ### 2. Local Board Tracker
 
