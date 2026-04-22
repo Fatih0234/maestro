@@ -56,6 +56,10 @@ type OpenCodeConfig struct {
 	BinaryPath string `yaml:"binary_path"` // Path to opencode binary (default: opencode serve)
 	Port       int    `yaml:"port"`        // Server port (0 = auto)
 	Password   string `yaml:"password"`    // Server password (optional)
+	Model      string `yaml:"model"`       // Model in format "provider/model" (e.g., "minimax-coding-plan/MiniMax-M2.7")
+	// Note: opencode serve inherits the model from the user's default profile
+	// (~/.config/opencode/profiles/auto/opencode.jsonc). The Model field here
+	// documents the intended model but requires the user to have it configured.
 }
 
 // CodexConfig holds Codex-specific settings.
@@ -89,6 +93,7 @@ func DefaultConfig() *Config {
 			BinaryPath: "opencode serve",
 			Port:       0,
 			Password:   "",
+			Model:      "minimax-coding-plan/MiniMax-M2.7",
 		},
 		Workspace: WorkspaceConfig{
 			BaseDir:      ".",
