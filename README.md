@@ -2,6 +2,28 @@
 
 A minimal orchestrator for OpenCode coding agents. Poll a local board, create workspaces, dispatch agents, and monitor progress via TUI.
 
+**Contrabass-PI runs here, but agents work on a remote project.**
+
+## Architecture
+
+```
+┌─────────────────────────────────┐
+│  Contrabass-PI (this directory) │  ← Orchestrator lives here
+│  ├── Board                      │  ← Issue tracking here
+│  ├── Orchestrator               │  ← Manages everything
+│  └── Agent runner               │  ← Spawns agents
+└─────────────────────────────────┘
+                │ "work in /remote/project"
+                ▼
+┌─────────────────────────────────┐
+│  Remote Project                 │  ← Agents work here
+│  ├── Git history                │  ← Commits go here
+│  └── workspaces/CB-1/           │  ← Agent worktrees
+└─────────────────────────────────┘
+```
+
+Configure `WORKFLOW.md` to point `workspace.base_dir` at any project you want to work on.
+
 ## Overview
 
 Inspired by [Contrabass](https://github.com/junhoyeo/contrabass), stripped to essentials:
@@ -23,6 +45,7 @@ Everything else (teams, external trackers, web dashboard) is deferred.
 |------|---------|
 | `docs/context/` | Implementation guides |
 | `docs/references/contrabass/` | Contrabass source (reference only, gitignored) |
+| `docs/remote-project-orchestration.md` | How to orchestrate remote projects |
 
 ---
 
