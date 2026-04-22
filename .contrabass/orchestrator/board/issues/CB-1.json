@@ -1,0 +1,15 @@
+{
+  "id": "CB-1",
+  "identifier": "CB-1",
+  "title": "Create README section",
+  "description": "Add a 'Features' section to the README.md file with 3 bullet points describing the project.",
+  "state": "in_progress",
+  "labels": [
+    "documentation",
+    "good-first-issue"
+  ],
+  "url": "local://CB-1",
+  "claimed_by": "fatihkarahan",
+  "created_at": "2026-04-22T10:00:00Z",
+  "updated_at": "2026-04-22T16:50:20.519216Z"
+}

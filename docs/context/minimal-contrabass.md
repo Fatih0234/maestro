@@ -96,7 +96,7 @@ workspace:
 | `max_concurrency` | int | 3 | Max concurrent agents |
 | `poll_interval_ms` | int | 30000 | Poll interval in ms |
 | `tracker.type` | string | internal | Tracker type |
-| `tracker.board_dir` | string | .contrabass/board | Local board path |
+| `tracker.board_dir` | string | .contrabass/orchestrator/board | Local board path |
 | `tracker.issue_prefix` | string | CB | Issue ID prefix |
 | `agent.type` | string | opencode | Agent type |
 | `opencode.binary_path` | string | opencode serve | OpenCode binary |
@@ -116,12 +116,17 @@ workspace:
 File-based issue storage:
 
 ```
-.contrabass/board/
-├── manifest.json           # Board metadata
-└── issues/
-    ├── CB-1.json          # Issue data
-    ├── CB-2.json
-    └── ...
+.contrabass/
+├── orchestrator/
+│   ├── WORKFLOW.md          # Active orchestrator config
+│   └── board/               # Issues for current project
+│       ├── manifest.json
+│       └── issues/
+│           └── CB-*.json
+└── projects/
+    └── <project-name>/       # Per-project config + issues
+        ├── WORKFLOW.md
+        └── board/
 ```
 
 **manifest.json:**

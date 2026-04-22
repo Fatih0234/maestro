@@ -25,7 +25,7 @@ const (
 
 // Default paths
 const (
-	DefaultBoardDir    = ".contrabass/board"
+	DefaultBoardDir    = ".contrabass/orchestrator/board"
 	DefaultIssuePrefix = "CB"
 	SchemaVersion     = "2" // v2: added retry_queued board state
 )

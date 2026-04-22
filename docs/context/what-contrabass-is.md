@@ -73,12 +73,11 @@ Template bindings: `{{ issue.title }}`, `{{ issue.description }}`, `{{ issue.url
 |---------|------|-------------|
 | Linear | External | GraphQL API to linear.app |
 | GitHub | External | REST API to GitHub Issues |
-| Local Board | Internal | File-based `.contrabass/board/` |
+| Local Board | Internal | File-based `.contrabass/orchestrator/board/` or `.contrabass/projects/<project>/board/` |
 
 The **Local Board** is a file-based tracker that stores issues as JSON files:
-- `.contrabass/board/manifest.json` — board metadata
-- `.contrabass/board/issues/CB-1.json` — individual issue
-- `.contrabass/board/comments/CB-1.jsonl` — comment stream
+- `.contrabass/projects/<project>/board/manifest.json` — board metadata
+- `.contrabass/projects/<project>/board/issues/CB-1.json` — individual issue
 
 States: `todo`, `in_progress`, `retry`, `done`
 

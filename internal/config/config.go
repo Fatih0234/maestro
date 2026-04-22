@@ -83,7 +83,7 @@ func DefaultConfig() *Config {
 		MaxRetryBackoffMs: 240000,
 		Tracker: TrackerConfig{
 			Type:        "internal",
-			BoardDir:    ".contrabass/board",
+			BoardDir:    ".contrabass/orchestrator/board",
 			IssuePrefix: "CB",
 		},
 		Agent: AgentConfig{
