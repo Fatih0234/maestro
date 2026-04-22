@@ -570,6 +570,147 @@ func TestOpenCodeRunner_EnsureServerStartsWorkspacesInParallel(t *testing.T) {
 	t.Skip("Skipping parallel server startup test - requires process spawning environment")
 }
 
+func TestOpenCodeRunner_ProfileAndAgentParameters(t *testing.T) {
+	// Test that NewOpenCodeRunner accepts and stores profile/agent parameters
+	runner := NewOpenCodeRunner("opencode serve", 0, "", "", 2*time.Second, "ws", "scribe", ".opencode")
+	if runner == nil {
+		t.Fatal("expected non-nil runner")
+	}
+
+	// We can't directly access private fields, but we can verify the runner was created
+	// and Close() works without error (which accesses internal state)
+	if err := runner.Close(); err != nil {
+		t.Errorf("Close() error = %v", err)
+	}
+}
+
+func TestOpenCodeRunner_PromptSubmissionIncludesAgent(t *testing.T) {
+	startStream := make(chan struct{})
+	var receivedBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/session":
+			_, _ = io.WriteString(w, `{"id":"sess-agent-test"}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/prompt_async"):
+			// Parse the body to verify agent field
+			bodyBytes, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(bodyBytes, &receivedBody)
+			w.WriteHeader(http.StatusNoContent)
+			close(startStream)
+		case r.Method == http.MethodGet && r.URL.Path == "/event":
+			setSSEHeaders(w)
+			<-startStream
+			writeSSEEvent(w, "message", `{"type":"session.status","properties":{"sessionID":"sess-agent-test","status":{"type":"idle"}}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	workspace := t.TempDir()
+	// Create runner WITH agent specified
+	runner := NewOpenCodeRunner("opencode serve", 0, "", "", 2*time.Second, "", "coder", "")
+	primeTestOpenCodeServer(runner, workspace, server.URL, 4242)
+
+	proc, err := runner.Start(context.Background(), types.Issue{}, workspace, "test prompt")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	// Wait for the prompt to be submitted
+	select {
+	case <-startStream:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for prompt submission")
+	}
+
+	// Verify agent field was included in the request body
+	if agent, ok := receivedBody["agent"].(string); !ok || agent != "coder" {
+		t.Errorf("agent in request body = %v, want 'coder'", receivedBody["agent"])
+	}
+
+	// Verify parts are still included
+	if parts, ok := receivedBody["parts"].([]interface{}); !ok || len(parts) == 0 {
+		t.Error("parts should be present in request body")
+	}
+
+	<-proc.Done
+	runner.Close()
+}
+
+func TestOpenCodeRunner_PromptSubmissionNoAgentWhenEmpty(t *testing.T) {
+	startStream := make(chan struct{})
+	var receivedBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/session":
+			_, _ = io.WriteString(w, `{"id":"sess-no-agent-test"}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/prompt_async"):
+			bodyBytes, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(bodyBytes, &receivedBody)
+			w.WriteHeader(http.StatusNoContent)
+			close(startStream)
+		case r.Method == http.MethodGet && r.URL.Path == "/event":
+			setSSEHeaders(w)
+			<-startStream
+			writeSSEEvent(w, "message", `{"type":"session.status","properties":{"sessionID":"sess-no-agent-test","status":{"type":"idle"}}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	workspace := t.TempDir()
+	// Create runner WITHOUT agent specified
+	runner := NewOpenCodeRunner("opencode serve", 0, "", "", 2*time.Second, "", "", "")
+	primeTestOpenCodeServer(runner, workspace, server.URL, 4242)
+
+	proc, err := runner.Start(context.Background(), types.Issue{}, workspace, "test prompt")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	select {
+	case <-startStream:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for prompt submission")
+	}
+
+	// Verify agent field is NOT present when not configured
+	if _, ok := receivedBody["agent"]; ok {
+		t.Errorf("agent should not be present in request body when not configured, got: %v", receivedBody["agent"])
+	}
+
+	<-proc.Done
+	runner.Close()
+}
+
+func TestOpenCodeRunner_ConfigDirParameter(t *testing.T) {
+	// Test that runner accepts configDir parameter
+	runner := NewOpenCodeRunner("opencode serve", 0, "", "", 2*time.Second, "", "", "/custom/path")
+	if runner == nil {
+		t.Fatal("expected non-nil runner")
+	}
+
+	if err := runner.Close(); err != nil {
+		t.Errorf("Close() error = %v", err)
+	}
+}
+
+func TestOpenCodeRunner_ProfileParameter(t *testing.T) {
+	// Test that runner accepts profile parameter
+	runner := NewOpenCodeRunner("opencode serve", 0, "", "", 2*time.Second, "omo-power", "", "")
+	if runner == nil {
+		t.Fatal("expected non-nil runner")
+	}
+
+	if err := runner.Close(); err != nil {
+		t.Errorf("Close() error = %v", err)
+	}
+}
+
 // Helper functions for tests
 
 func newTestOpenCodeRunner(serverURL string) *OpenCodeRunner {
