@@ -21,6 +21,7 @@ const (
 	EventStallDetected    = "stall.detected"
 	EventTimeoutDetected  = "timeout.detected"
 	EventPollCompleted    = "poll.completed"
+	EventMergeFailed      = "merge.failed"
 )
 
 // Event payloads
@@ -100,4 +101,10 @@ type StallDetectedPayload struct {
 type TimeoutDetectedPayload struct {
 	IssueID string
 	Elapsed time.Duration
+}
+
+// MergeFailedPayload is the payload for EventMergeFailed.
+type MergeFailedPayload struct {
+	IssueID string
+	Error   string
 }

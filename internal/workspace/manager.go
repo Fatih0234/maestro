@@ -19,6 +19,7 @@ import (
 type WorkspaceManager interface {
 	Create(ctx context.Context, issue types.Issue) (string, error)
 	Cleanup(ctx context.Context, issueID string) error
+	MergeToMain(ctx context.Context, issueID string) error
 }
 
 // Default paths
@@ -194,6 +195,66 @@ func (m *Manager) CleanupAll(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// MergeToMain merges the issue's worktree branch into main and cleans up the branch.
+// Returns error if merge fails (e.g., conflicts). Does NOT remove the worktree on error.
+// The caller is responsible for calling Cleanup after successful merge.
+func (m *Manager) MergeToMain(ctx context.Context, issueID string) error {
+	if issueID == "" {
+		return errors.New("issue ID is required")
+	}
+
+	unlock := m.lockIssue(issueID)
+	defer unlock()
+
+	branchName := m.branchPrefix + sanitizeBranchName(issueID)
+
+	// 1. Verify worktree exists
+	wsPath := m.workspacePath(issueID)
+	if _, err := os.Stat(wsPath); err != nil {
+		return fmt.Errorf("worktree for %s does not exist: %w", issueID, err)
+	}
+
+	// 2. Check if branch has commits (skip merge if empty - shouldn't happen with worktrees)
+	if hasCommits, err := m.branchHasCommits(ctx, branchName); err != nil {
+		return err
+	} else if !hasCommits {
+		// No commits, nothing to merge
+		return nil
+	}
+
+	// 3. Checkout main in the base directory
+	if _, err := m.runGit(ctx, "checkout", "main"); err != nil {
+		return fmt.Errorf("checkout main failed: %w", err)
+	}
+
+	// 4. Attempt merge of the feature branch into main with --no-ff to preserve history
+	output, err := m.runGit(ctx, "merge", "--no-ff", branchName, "-m", fmt.Sprintf("Merge %s into main", branchName))
+	if err != nil {
+		// Check for conflicts
+		if strings.Contains(output, "CONFLICT") {
+			return fmt.Errorf("merge conflict in %s: %s", issueID, output)
+		}
+		return fmt.Errorf("merge failed for %s: %w; output: %s", issueID, err, output)
+	}
+
+	// 5. Push to origin if it exists (non-fatal if fails - local main has the changes)
+	if _, err := m.runGit(ctx, "push", "origin", "main"); err != nil {
+		// Non-fatal: local main has the changes even if push fails
+	}
+
+	return nil
+}
+
+// branchHasCommits checks if a branch has any commits.
+func (m *Manager) branchHasCommits(ctx context.Context, branchName string) (bool, error) {
+	output, err := m.runGit(ctx, "rev-list", "--count", branchName)
+	if err != nil {
+		return false, err
+	}
+	count := strings.TrimSpace(output)
+	return count != "0", nil
 }
 
 // Exists checks if a workspace exists for the given issue.

@@ -468,6 +468,15 @@ func (o *Orchestrator) handleAgentDone(issueID string, runErr error) {
 		// Mark issue as done
 		_, _ = o.Tracker.UpdateIssueState(issueID, types.StateReleased)
 
+		// Merge worktree branch to main BEFORE cleanup
+		// This is non-fatal - we log failures but still proceed
+		if mergeErr := o.Workspace.MergeToMain(o.ctx, issueID); mergeErr != nil {
+			o.emit(EventMergeFailed, issueID, MergeFailedPayload{
+				IssueID: issueID,
+				Error:   mergeErr.Error(),
+			})
+		}
+
 		// Cleanup workspace
 		_ = o.Workspace.Cleanup(o.ctx, issueID)
 
