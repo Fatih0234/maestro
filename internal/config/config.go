@@ -56,10 +56,10 @@ type OpenCodeConfig struct {
 	BinaryPath string `yaml:"binary_path"` // Path to opencode binary (default: opencode serve)
 	Port       int    `yaml:"port"`        // Server port (0 = auto)
 	Password   string `yaml:"password"`    // Server password (optional)
-	Model      string `yaml:"model"`       // Model in format "provider/model" (e.g., "minimax-coding-plan/MiniMax-M2.7")
-	// Note: opencode serve inherits the model from the user's default profile
-	// (~/.config/opencode/profiles/auto/opencode.jsonc). The Model field here
-	// documents the intended model but requires the user to have it configured.
+	Model      string `yaml:"model"`       // Deprecated: model is set in profile config
+	Profile    string `yaml:"profile"`     // Profile name (e.g., "ws", "omo-power") - maps to ~/.config/opencode/profiles/<profile>/opencode.jsonc
+	Agent      string `yaml:"agent"`       // Default agent (e.g., "scribe", "build", "plan", "explore", "coder")
+	ConfigDir  string `yaml:"config_dir"`  // Optional custom .opencode directory
 }
 
 // CodexConfig holds Codex-specific settings.
@@ -93,7 +93,10 @@ func DefaultConfig() *Config {
 			BinaryPath: "opencode serve",
 			Port:       0,
 			Password:   "",
-			Model:      "minimax-coding-plan/MiniMax-M2.7",
+			Model:      "",
+			Profile:    "",
+			Agent:      "",
+			ConfigDir:  "",
 		},
 		Workspace: WorkspaceConfig{
 			BaseDir:      ".",
@@ -209,6 +212,13 @@ func (c *Config) Validate() error {
 		}
 		if c.OpenCode.BinaryPath == "" {
 			return fmt.Errorf("opencode.binary_path is required")
+		}
+		// If profile is specified, check it exists
+		if c.OpenCode.Profile != "" {
+			profilePath := os.ExpandEnv("$HOME/.config/opencode/profiles/") + c.OpenCode.Profile + "/opencode.jsonc"
+			if _, err := os.Stat(profilePath); err != nil {
+				return fmt.Errorf("opencode profile %q not found at %s: %w", c.OpenCode.Profile, profilePath, err)
+			}
 		}
 	case "codex":
 		if c.Codex == nil {

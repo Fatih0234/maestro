@@ -48,6 +48,9 @@ type OpenCodeRunner struct {
 	password   string
 	username   string
 	timeout    time.Duration
+	profile    string // Profile name (e.g., "ws", "omo-power")
+	agent      string // Default agent (e.g., "scribe", "build", "plan")
+	configDir  string // Optional custom .opencode directory
 
 	mu           sync.Mutex
 	servers      map[string]*openCodeServer
@@ -67,7 +70,14 @@ var (
 var _ types.AgentRunner = (*OpenCodeRunner)(nil)
 
 // NewOpenCodeRunner creates a new OpenCode runner.
-func NewOpenCodeRunner(binaryPath string, port int, password, username string, timeout time.Duration) *OpenCodeRunner {
+// binaryPath: path to opencode binary (e.g., "opencode serve")
+// port: server port (0 = auto)
+// password/username: optional auth credentials
+// timeout: startup timeout
+// profile: profile name (e.g., "ws", "omo-power") - maps to ~/.config/opencode/profiles/<profile>/opencode.jsonc
+// agent: default agent (e.g., "scribe", "build", "plan", "explore", "coder")
+// configDir: optional custom .opencode directory
+func NewOpenCodeRunner(binaryPath string, port int, password, username string, timeout time.Duration, profile, agent, configDir string) *OpenCodeRunner {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
@@ -78,6 +88,9 @@ func NewOpenCodeRunner(binaryPath string, port int, password, username string, t
 		password:     password,
 		username:     username,
 		timeout:      timeout,
+		profile:      profile,
+		agent:        agent,
+		configDir:    configDir,
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 		streamClient: &http.Client{},
 		servers:      make(map[string]*openCodeServer),
@@ -261,6 +274,23 @@ func (r *OpenCodeRunner) startServer(
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
+
+	// Inject OPENCODE_CONFIG and optionally OPENCODE_CONFIG_DIR
+	env := os.Environ()
+	if r.profile != "" {
+		profilePath := os.ExpandEnv("$HOME/.config/opencode/profiles/") + r.profile + "/opencode.jsonc"
+		env = append(env, "OPENCODE_CONFIG="+profilePath)
+	}
+	if r.configDir != "" {
+		// Expand HOME in configDir if needed
+		configDir := r.configDir
+		if strings.HasPrefix(configDir, "~/") {
+			configDir = os.ExpandEnv("$HOME/") + configDir[2:]
+		}
+		env = append(env, "OPENCODE_CONFIG_DIR="+configDir)
+	}
+	cmd.Env = env
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("create opencode stdout pipe: %w", err)
@@ -533,6 +563,10 @@ func (r *OpenCodeRunner) submitPrompt(ctx context.Context, serverURL, sessionID,
 		"parts": []map[string]interface{}{
 			{"type": "text", "text": prompt},
 		},
+	}
+	// Set agent if configured
+	if r.agent != "" {
+		body["agent"] = r.agent
 	}
 	resp, err := r.doRequest(ctx, http.MethodPost, serverURL+"/session/"+sessionID+"/prompt_async", body, nil)
 	if err != nil {

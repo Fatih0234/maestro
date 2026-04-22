@@ -20,14 +20,14 @@ import (
 
 func TestOpenCodeRunner_CompileTimeCheck(t *testing.T) {
 	var _ types.AgentRunner = (*OpenCodeRunner)(nil)
-	runner := NewOpenCodeRunner("opencode serve", 0, "", "", time.Second)
+	runner := NewOpenCodeRunner("opencode serve", 0, "", "", time.Second, "", "", "")
 	if runner == nil {
 		t.Fatal("expected non-nil runner")
 	}
 }
 
 func TestOpenCodeRunner_Close(t *testing.T) {
-	runner := NewOpenCodeRunner("opencode serve", 0, "", "", time.Second)
+	runner := NewOpenCodeRunner("opencode serve", 0, "", "", time.Second, "", "", "")
 	if err := runner.Close(); err != nil {
 		t.Errorf("Close() error = %v", err)
 	}
@@ -114,7 +114,7 @@ func TestOpenCodeRunner_StartWithAuth(t *testing.T) {
 	defer server.Close()
 
 	workspace := t.TempDir()
-	runner := NewOpenCodeRunner("opencode serve", 0, "secret", "alice", 2*time.Second)
+	runner := NewOpenCodeRunner("opencode serve", 0, "secret", "alice", 2*time.Second, "", "", "")
 	primeTestOpenCodeServer(runner, workspace, server.URL, 4242)
 
 	proc, err := runner.Start(context.Background(), types.Issue{}, workspace, "hello")
@@ -438,7 +438,7 @@ func TestOpenCodeRunner_ConcurrentSessions(t *testing.T) {
 }
 
 func TestOpenCodeRunner_PortForNewServerLocked(t *testing.T) {
-	runner := NewOpenCodeRunner("opencode serve", 8787, "", "", time.Second)
+	runner := NewOpenCodeRunner("opencode serve", 8787, "", "", time.Second, "", "", "")
 
 	// No servers yet, should return base port
 	runner.mu.Lock()
@@ -467,7 +467,7 @@ func TestOpenCodeRunner_PortForNewServerLocked(t *testing.T) {
 	}
 
 	// Disabled when port is 0
-	runner2 := NewOpenCodeRunner("opencode serve", 0, "", "", time.Second)
+	runner2 := NewOpenCodeRunner("opencode serve", 0, "", "", time.Second, "", "", "")
 	runner2.mu.Lock()
 	port = runner2.portForNewServerLocked()
 	runner2.mu.Unlock()
@@ -522,7 +522,7 @@ func TestOpenCodeRunner_WorkspaceScopedServers(t *testing.T) {
 
 	workspaceA := t.TempDir()
 	workspaceB := t.TempDir()
-	runner := NewOpenCodeRunner("opencode serve", 0, "", "", 2*time.Second)
+	runner := NewOpenCodeRunner("opencode serve", 0, "", "", 2*time.Second, "", "", "")
 	primeTestOpenCodeServer(runner, workspaceA, serverA.URL, 4242)
 	primeTestOpenCodeServer(runner, workspaceB, serverB.URL, 4343)
 
@@ -573,7 +573,7 @@ func TestOpenCodeRunner_EnsureServerStartsWorkspacesInParallel(t *testing.T) {
 // Helper functions for tests
 
 func newTestOpenCodeRunner(serverURL string) *OpenCodeRunner {
-	r := NewOpenCodeRunner("opencode serve", 0, "", "", 2*time.Second)
+	r := NewOpenCodeRunner("opencode serve", 0, "", "", 2*time.Second, "", "", "")
 	primeTestOpenCodeServer(r, "", serverURL, 4242)
 	return r
 }

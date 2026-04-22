@@ -1,6 +1,7 @@
 //go:build ignore
 
 // Demo script to test Phase 2: OpenCodeRunner with real opencode server
+// and profile/agent configuration
 package main
 
 import (
@@ -15,15 +16,27 @@ import (
 
 func main() {
 	fmt.Println("=== Contrabass Phase 2 Demo ===")
-	fmt.Println("Testing OpenCodeRunner with real opencode server\n")
+	fmt.Println("Testing OpenCodeRunner with profile/agent configuration\n")
 
-	// Create runner with default settings
-	runner := agent.NewOpenCodeRunner("opencode serve", 0, "", "", 30*time.Second)
+	// Get profile and agent from environment or use defaults
+	profile := os.Getenv("OPENCODE_TEST_PROFILE")
+	if profile == "" {
+		profile = "ws"
+	}
+	agentName := os.Getenv("OPENCODE_TEST_AGENT")
+	if agentName == "" {
+		agentName = "scribe"
+	}
+
+	// Create runner with profile and agent configuration
+	runner := agent.NewOpenCodeRunner("opencode serve", 0, "", "", 30*time.Second, profile, agentName, "")
 
 	workspace := os.TempDir()
-	prompt := "What is 2 + 2? Just answer with the number."
+	prompt := "just testing, just say yes"
 
 	fmt.Printf("Starting session in workspace: %s\n", workspace)
+	fmt.Printf("Profile: %s\n", profile)
+	fmt.Printf("Agent: %s\n", agentName)
 	fmt.Printf("Prompt: %s\n\n", prompt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
