@@ -20,7 +20,7 @@ import (
 type Orchestrator struct {
 	Config      *config.Config
 	Tracker     types.IssueTracker
-	Workspace   workspace.Manager
+	Workspace   workspace.WorkspaceManager // interface
 	AgentRunner types.AgentRunner
 	Events      chan types.OrchestratorEvent
 	State       *StateManager
@@ -39,7 +39,7 @@ type Orchestrator struct {
 }
 
 // New creates a new Orchestrator.
-func New(cfg *config.Config, tr types.IssueTracker, ws workspace.Manager, runner types.AgentRunner) *Orchestrator {
+func New(cfg *config.Config, tr types.IssueTracker, ws workspace.WorkspaceManager, runner types.AgentRunner) *Orchestrator {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Use max_retry_backoff_ms from config, or default to 4 minutes

@@ -1,24 +1,12 @@
 package orchestrator
 
 import (
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
 )
-
-func makeTestIssue(id string) types.Issue {
-	return types.Issue{
-		ID:          id,
-		Identifier:  id,
-		Title:       "Test Issue " + id,
-		Description: "Test description",
-		State:       types.StateUnclaimed,
-		Labels:      []string{},
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}
-}
 
 func makeTestProcess(sessionID string) *types.AgentProcess {
 	return &types.AgentProcess{
@@ -29,10 +17,23 @@ func makeTestProcess(sessionID string) *types.AgentProcess {
 	}
 }
 
+func makeTestIssue(id, title string) types.Issue {
+	return types.Issue{
+		ID:          id,
+		Identifier:  id,
+		Title:       title,
+		Description: "Test description",
+		State:       types.StateUnclaimed,
+		Labels:      []string{},
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+}
+
 func TestStateManager_Add(t *testing.T) {
 	s := NewStateManager()
 
-	issue := makeTestIssue("CB-1")
+	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
 
 	s.Add("CB-1", issue, 1, proc)
@@ -55,7 +56,7 @@ func TestStateManager_Add(t *testing.T) {
 func TestStateManager_UpdatePhase(t *testing.T) {
 	s := NewStateManager()
 
-	issue := makeTestIssue("CB-1")
+	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
 	s.Add("CB-1", issue, 1, proc)
 
@@ -70,7 +71,7 @@ func TestStateManager_UpdatePhase(t *testing.T) {
 func TestStateManager_UpdateTokens(t *testing.T) {
 	s := NewStateManager()
 
-	issue := makeTestIssue("CB-1")
+	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
 	s.Add("CB-1", issue, 1, proc)
 
@@ -88,7 +89,7 @@ func TestStateManager_UpdateTokens(t *testing.T) {
 func TestStateManager_UpdateLastEvent(t *testing.T) {
 	s := NewStateManager()
 
-	issue := makeTestIssue("CB-1")
+	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
 	s.Add("CB-1", issue, 1, proc)
 
@@ -104,7 +105,7 @@ func TestStateManager_UpdateLastEvent(t *testing.T) {
 func TestStateManager_SetError(t *testing.T) {
 	s := NewStateManager()
 
-	issue := makeTestIssue("CB-1")
+	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
 	s.Add("CB-1", issue, 1, proc)
 
@@ -119,7 +120,7 @@ func TestStateManager_SetError(t *testing.T) {
 func TestStateManager_Remove(t *testing.T) {
 	s := NewStateManager()
 
-	issue := makeTestIssue("CB-1")
+	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
 	s.Add("CB-1", issue, 1, proc)
 
@@ -137,14 +138,14 @@ func TestStateManager_Len(t *testing.T) {
 		t.Errorf("Len() = %d, want 0", s.Len())
 	}
 
-	issue1 := makeTestIssue("CB-1")
+	issue1 := makeTestIssue("CB-1", "Test Issue CB-1")
 	s.Add("CB-1", issue1, 1, makeTestProcess("sess-1"))
 
 	if s.Len() != 1 {
 		t.Errorf("Len() = %d, want 1", s.Len())
 	}
 
-	issue2 := makeTestIssue("CB-2")
+	issue2 := makeTestIssue("CB-2", "Test Issue CB-2")
 	s.Add("CB-2", issue2, 1, makeTestProcess("sess-2"))
 
 	if s.Len() != 2 {
@@ -161,10 +162,10 @@ func TestStateManager_Len(t *testing.T) {
 func TestStateManager_GetAll(t *testing.T) {
 	s := NewStateManager()
 
-	issue1 := makeTestIssue("CB-1")
+	issue1 := makeTestIssue("CB-1", "Test Issue CB-1")
 	s.Add("CB-1", issue1, 1, makeTestProcess("sess-1"))
 
-	issue2 := makeTestIssue("CB-2")
+	issue2 := makeTestIssue("CB-2", "Test Issue CB-2")
 	s.Add("CB-2", issue2, 1, makeTestProcess("sess-2"))
 
 	all := s.GetAll()
@@ -176,12 +177,12 @@ func TestStateManager_GetAll(t *testing.T) {
 func TestStateManager_GetByPhase(t *testing.T) {
 	s := NewStateManager()
 
-	issue1 := makeTestIssue("CB-1")
+	issue1 := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc1 := makeTestProcess("sess-1")
 	s.Add("CB-1", issue1, 1, proc1)
 	s.UpdatePhase("CB-1", types.PhaseStreamingTurn)
 
-	issue2 := makeTestIssue("CB-2")
+	issue2 := makeTestIssue("CB-2", "Test Issue CB-2")
 	proc2 := makeTestProcess("sess-2")
 	s.Add("CB-2", issue2, 1, proc2)
 	s.UpdatePhase("CB-2", types.PhaseInitializingSession)
@@ -193,4 +194,41 @@ func TestStateManager_GetByPhase(t *testing.T) {
 	if running[0].Issue.ID != "CB-1" {
 		t.Errorf("GetByPhase(StreamingTurn)[0].Issue.ID = %q, want CB-1", running[0].Issue.ID)
 	}
+}
+
+func TestStateManager_ConcurrentAccess(t *testing.T) {
+	s := NewStateManager()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			issue := makeTestIssue("CB-"+string(rune('0'+i)), "Test")
+			proc := &types.AgentProcess{PID: i, SessionID: "sess"}
+			s.Add("CB-"+string(rune('0'+i)), issue, 1, proc)
+		}(i)
+	}
+	wg.Wait()
+
+	if s.Len() != 10 {
+		t.Errorf("Len() = %d, want 10", s.Len())
+	}
+}
+
+func TestStateManager_UpdateNonExistent(t *testing.T) {
+	s := NewStateManager()
+
+	// Should not panic
+	s.UpdatePhase("CB-999", types.PhaseSucceeded)
+	s.UpdateTokens("CB-999", 100, 200)
+	s.UpdateLastEvent("CB-999")
+	s.SetError("CB-999", "error")
+}
+
+func TestStateManager_RemoveNonExistent(t *testing.T) {
+	s := NewStateManager()
+
+	// Should not panic
+	s.Remove("CB-999")
 }

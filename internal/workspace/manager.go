@@ -15,6 +15,12 @@ import (
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
 )
 
+// WorkspaceManager interface defines the operations needed by the orchestrator.
+type WorkspaceManager interface {
+	Create(ctx context.Context, issue types.Issue) (string, error)
+	Cleanup(ctx context.Context, issueID string) error
+}
+
 // Default paths
 const (
 	DefaultBaseDir      = "."
