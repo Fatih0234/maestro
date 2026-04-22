@@ -4,7 +4,9 @@
   "title": "Add score display",
   "description": "Add a score counter that displays in the top-left corner of the game. The score should increment by 10 points each time the snake eats food.",
   "state": "todo",
-  "labels": ["feature"],
+  "labels": [
+    "feature"
+  ],
   "created_at": "2026-04-22T00:00:00Z",
-  "updated_at": "2026-04-22T00:00:00Z"
+  "updated_at": "2026-04-22T20:10:55Z"
 }
