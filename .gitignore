@@ -1,2 +1,6 @@
 # Contrabass reference repo (used only for study)
 docs/references/contrabass/
+
+# Local agent/runtime state
+.pi/
+.contrabass/projects/*/runs/

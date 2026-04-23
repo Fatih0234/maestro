@@ -19,6 +19,7 @@ import (
 const (
 	StateTodo        = "todo"
 	StateInProgress  = "in_progress"
+	StateInReview    = "in_review"
 	StateDone        = "done"
 	StateRetryQueued = "retry_queued" // Issue waiting for backoff retry
 )
@@ -27,31 +28,31 @@ const (
 const (
 	DefaultBoardDir    = ".contrabass/orchestrator/board"
 	DefaultIssuePrefix = "CB"
-	SchemaVersion     = "2" // v2: added retry_queued board state
+	SchemaVersion      = "3" // v3: added in_review board state
 )
 
 // Manifest represents the board metadata file.
 type Manifest struct {
-	SchemaVersion     string    `json:"schema_version"`
-	IssuePrefix       string    `json:"issue_prefix"`
-	NextIssueNumber   int       `json:"next_issue_number"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	SchemaVersion   string    `json:"schema_version"`
+	IssuePrefix     string    `json:"issue_prefix"`
+	NextIssueNumber int       `json:"next_issue_number"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // Issue represents a local board issue stored as JSON.
 type Issue struct {
-	ID           string     `json:"id"`
-	Identifier   string     `json:"identifier"`
-	Title        string     `json:"title"`
-	Description  string     `json:"description"`
-	State        string     `json:"state"`
-	Labels       []string   `json:"labels,omitempty"`
-	URL          string     `json:"url,omitempty"`
-	ClaimedBy    string     `json:"claimed_by,omitempty"`
-	RetryAfter   *time.Time `json:"retry_after,omitempty"` // When to retry (for retry_queued state)
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID          string     `json:"id"`
+	Identifier  string     `json:"identifier"`
+	Title       string     `json:"title"`
+	Description string     `json:"description"`
+	State       string     `json:"state"`
+	Labels      []string   `json:"labels,omitempty"`
+	URL         string     `json:"url,omitempty"`
+	ClaimedBy   string     `json:"claimed_by,omitempty"`
+	RetryAfter  *time.Time `json:"retry_after,omitempty"` // When to retry (for retry_queued state)
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // Config holds configuration for the local tracker.
@@ -135,7 +136,7 @@ func (t *LocalTracker) ensureBoardLocked() error {
 	}
 
 	// Ensure manifest has defaults
-	if manifest.SchemaVersion == "" {
+	if manifest.SchemaVersion != SchemaVersion {
 		manifest.SchemaVersion = SchemaVersion
 	}
 	if manifest.IssuePrefix == "" {
@@ -148,7 +149,8 @@ func (t *LocalTracker) ensureBoardLocked() error {
 	return writeJSONAtomic(manifestPath, manifest)
 }
 
-// FetchIssues returns all non-done issues that are ready to be processed.
+// FetchIssues returns all dispatchable issues that are ready to be processed.
+// Issues in done or in_review are excluded.
 // Issues in retry_queued state are only returned if their retry_after time has passed.
 func (t *LocalTracker) FetchIssues() ([]types.Issue, error) {
 	t.mu.Lock()
@@ -175,8 +177,8 @@ func (t *LocalTracker) FetchIssues() ([]types.Issue, error) {
 			return nil, err
 		}
 
-		// Skip done issues
-		if issue.State == StateDone {
+		// Skip terminal/handoff issues
+		if issue.State == StateDone || issue.State == StateInReview {
 			continue
 		}
 
@@ -217,9 +219,13 @@ func (t *LocalTracker) ClaimIssue(id string) (types.Issue, error) {
 	if err != nil {
 		return types.Issue{}, err
 	}
+	if issue.State == StateDone || issue.State == StateInReview {
+		return types.Issue{}, fmt.Errorf("issue %q cannot be claimed from state %q", id, issue.State)
+	}
 
 	issue.State = StateInProgress
 	issue.ClaimedBy = t.actor
+	issue.RetryAfter = nil
 	issue.UpdatedAt = time.Now().UTC()
 
 	if err := writeJSONAtomic(t.issuePath(id), issue); err != nil {
@@ -426,6 +432,8 @@ func toBoardState(state types.IssueState) string {
 		return StateInProgress
 	case types.StateRetryQueued:
 		return StateRetryQueued // Preserve retry_queued state
+	case types.StateInReview:
+		return StateInReview
 	case types.StateReleased:
 		return StateDone
 	default:
@@ -440,6 +448,8 @@ func toIssueState(state string) types.IssueState {
 		return types.StateRunning
 	case StateRetryQueued:
 		return types.StateRetryQueued
+	case StateInReview:
+		return types.StateInReview
 	case StateDone:
 		return types.StateReleased
 	default:

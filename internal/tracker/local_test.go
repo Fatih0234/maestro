@@ -60,6 +60,46 @@ func TestLocalTracker_EnsureBoard(t *testing.T) {
 	}
 }
 
+func TestLocalTracker_EnsureBoard_UpgradesSchemaVersion(t *testing.T) {
+	tmpDir := t.TempDir()
+	tracker := New(Config{BoardDir: tmpDir})
+
+	// Seed manifest with an older schema.
+	oldManifest := Manifest{
+		SchemaVersion:   "2",
+		IssuePrefix:     "CB",
+		NextIssueNumber: 7,
+		CreatedAt:       time.Now().Add(-time.Hour).UTC(),
+		UpdatedAt:       time.Now().Add(-time.Hour).UTC(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "issues"), 0o755); err != nil {
+		t.Fatalf("mkdir issues: %v", err)
+	}
+	if err := writeJSONAtomic(filepath.Join(tmpDir, "manifest.json"), oldManifest); err != nil {
+		t.Fatalf("seed manifest: %v", err)
+	}
+
+	if err := tracker.EnsureBoard(); err != nil {
+		t.Fatalf("EnsureBoard failed: %v", err)
+	}
+
+	var manifest Manifest
+	data, err := os.ReadFile(filepath.Join(tmpDir, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+
+	if manifest.SchemaVersion != SchemaVersion {
+		t.Fatalf("schema_version = %q, want %q", manifest.SchemaVersion, SchemaVersion)
+	}
+	if manifest.NextIssueNumber != 7 {
+		t.Fatalf("next_issue_number = %d, want 7", manifest.NextIssueNumber)
+	}
+}
+
 func TestLocalTracker_CreateIssue(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -278,6 +318,11 @@ func TestLocalTracker_FetchIssues(t *testing.T) {
 		t.Fatalf("CreateIssue 3 failed: %v", err)
 	}
 
+	issue4, err := tracker.CreateIssue("Issue 4", "Desc 4", nil)
+	if err != nil {
+		t.Fatalf("CreateIssue 4 failed: %v", err)
+	}
+
 	// Claim one
 	if _, err := tracker.ClaimIssue(issue2.ID); err != nil {
 		t.Fatalf("ClaimIssue failed: %v", err)
@@ -285,6 +330,11 @@ func TestLocalTracker_FetchIssues(t *testing.T) {
 
 	// Mark one as done
 	if _, err := tracker.UpdateIssueState(issue3.ID, types.StateReleased); err != nil {
+		t.Fatalf("UpdateIssueState failed: %v", err)
+	}
+
+	// Mark one as in review
+	if _, err := tracker.UpdateIssueState(issue4.ID, types.StateInReview); err != nil {
 		t.Fatalf("UpdateIssueState failed: %v", err)
 	}
 
@@ -302,6 +352,9 @@ func TestLocalTracker_FetchIssues(t *testing.T) {
 	for _, issue := range issues {
 		if issue.ID == issue3.ID {
 			t.Error("done issue should not be in FetchIssues result")
+		}
+		if issue.ID == issue4.ID {
+			t.Error("in_review issue should not be in FetchIssues result")
 		}
 	}
 }
@@ -348,6 +401,7 @@ func TestLocalTracker_IssueStateConversions(t *testing.T) {
 	}{
 		{StateTodo, types.StateUnclaimed},
 		{StateInProgress, types.StateRunning},
+		{StateInReview, types.StateInReview},
 		{StateDone, types.StateReleased},
 	}
 
@@ -370,6 +424,7 @@ func TestLocalTracker_BoardStateConversions(t *testing.T) {
 		{types.StateClaimed, StateInProgress},
 		{types.StateRunning, StateInProgress},
 		{types.StateRetryQueued, StateRetryQueued},
+		{types.StateInReview, StateInReview},
 		{types.StateReleased, StateDone},
 	}
 
@@ -535,5 +590,83 @@ func TestLocalTracker_UpdateIssueState_ClearsRetryAfter(t *testing.T) {
 
 	if fetched.RetryAfter != nil {
 		t.Error("expected RetryAfter to be cleared after state change")
+	}
+}
+
+func TestLocalTracker_ClaimIssue_InReviewRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tracker := New(Config{BoardDir: tmpDir})
+
+	issue, err := tracker.CreateIssue("Review Issue", "Description", nil)
+	if err != nil {
+		t.Fatalf("CreateIssue failed: %v", err)
+	}
+
+	if _, err := tracker.UpdateIssueState(issue.ID, types.StateInReview); err != nil {
+		t.Fatalf("UpdateIssueState failed: %v", err)
+	}
+
+	if _, err := tracker.ClaimIssue(issue.ID); err == nil {
+		t.Fatal("expected claim to fail for in_review issue")
+	}
+}
+
+func TestLocalTracker_ClaimIssue_DoneRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	tracker := New(Config{BoardDir: tmpDir})
+
+	issue, err := tracker.CreateIssue("Done Issue", "Description", nil)
+	if err != nil {
+		t.Fatalf("CreateIssue failed: %v", err)
+	}
+
+	if _, err := tracker.UpdateIssueState(issue.ID, types.StateReleased); err != nil {
+		t.Fatalf("UpdateIssueState failed: %v", err)
+	}
+
+	if _, err := tracker.ClaimIssue(issue.ID); err == nil {
+		t.Fatal("expected claim to fail for done issue")
+	}
+}
+
+func TestLocalTracker_UpdateIssueState_InReviewClearsClaimAndRetryAfter(t *testing.T) {
+	tmpDir := t.TempDir()
+	tracker := New(Config{BoardDir: tmpDir, Actor: "tester"})
+
+	issue, err := tracker.CreateIssue("Review cleanup", "Description", nil)
+	if err != nil {
+		t.Fatalf("CreateIssue failed: %v", err)
+	}
+
+	if _, err := tracker.ClaimIssue(issue.ID); err != nil {
+		t.Fatalf("ClaimIssue failed: %v", err)
+	}
+	retryAt := time.Now().Add(time.Hour)
+	if _, err := tracker.SetRetryQueue(issue.ID, retryAt); err != nil {
+		t.Fatalf("SetRetryQueue failed: %v", err)
+	}
+
+	if _, err := tracker.UpdateIssueState(issue.ID, types.StateInReview); err != nil {
+		t.Fatalf("UpdateIssueState failed: %v", err)
+	}
+
+	var stored Issue
+	data, err := os.ReadFile(filepath.Join(tmpDir, "issues", issue.ID+".json"))
+	if err != nil {
+		t.Fatalf("read issue file: %v", err)
+	}
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatalf("unmarshal issue file: %v", err)
+	}
+
+	if stored.State != StateInReview {
+		t.Fatalf("state = %q, want %q", stored.State, StateInReview)
+	}
+	if stored.ClaimedBy != "" {
+		t.Fatalf("claimed_by = %q, want empty", stored.ClaimedBy)
+	}
+	if stored.RetryAfter != nil {
+		t.Fatal("retry_after should be cleared when entering in_review")
 	}
 }

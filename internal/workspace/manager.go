@@ -26,7 +26,7 @@ type WorkspaceManager interface {
 const (
 	DefaultBaseDir      = "."
 	DefaultBranchPrefix = "opencode/"
-	DefaultWorktreeDir  = "workspaces"
+	DefaultWorktreeDir  = "" // default is derived from the base repo name and placed outside the repo tree
 )
 
 // Manager handles git worktree-based workspaces for issues.
@@ -39,7 +39,7 @@ type Manager struct {
 
 	mu     sync.RWMutex
 	active map[string]string // issueID -> workspacePath
-	locks  sync.Map           // Per-issue locks
+	locks  sync.Map          // Per-issue locks
 }
 
 // Config holds configuration for the workspace manager.
@@ -56,9 +56,9 @@ func New(cfg Config) *Manager {
 		baseDir = DefaultBaseDir
 	}
 
-	worktreeDir := cfg.WorktreeDir
-	if strings.TrimSpace(worktreeDir) == "" {
-		worktreeDir = DefaultWorktreeDir
+	worktreeDir := strings.TrimSpace(cfg.WorktreeDir)
+	if worktreeDir == "" {
+		worktreeDir = defaultWorktreeDir(baseDir)
 	}
 
 	branchPrefix := cfg.BranchPrefix
@@ -112,15 +112,20 @@ func (m *Manager) Create(ctx context.Context, issue types.Issue) (string, error)
 
 	// Create git worktree
 	branchName := m.branchPrefix + sanitizeBranchName(issue.ID)
-	_, err := m.runGit(ctx, "worktree", "add", workspacePath, "-b", branchName)
+	output, err := m.runGit(ctx, "worktree", "add", workspacePath, "-b", branchName)
 	if err != nil {
-		// Fallback: try adding without creating a new branch
-		_, fallbackErr := m.runGit(ctx, "worktree", "add", workspacePath, issue.ID)
-		if fallbackErr != nil {
-			return "", fmt.Errorf(
-				"create git worktree for issue %s: worktree add -b %s failed: %v; fallback failed: %w",
-				issue.ID, branchName, err, fallbackErr,
-			)
+		// If the branch already exists, reuse it instead of falling back to an
+		// invalid ref. This makes reruns idempotent after cleanup removed the
+		// worktree but preserved the branch.
+		if strings.Contains(output, "a branch named") && strings.Contains(output, "already exists") {
+			if _, fallbackErr := m.runGit(ctx, "worktree", "add", workspacePath, branchName); fallbackErr != nil {
+				return "", fmt.Errorf(
+					"create git worktree for issue %s: worktree add -b %s failed: %v; fallback to existing branch failed: %w",
+					issue.ID, branchName, err, fallbackErr,
+				)
+			}
+		} else {
+			return "", fmt.Errorf("create git worktree for issue %s: worktree add -b %s failed: %w", issue.ID, branchName, err)
 		}
 	}
 
@@ -325,7 +330,25 @@ func sanitizeFileName(name string) string {
 
 // workspacePath returns the full path to a workspace directory.
 func (m *Manager) workspacePath(issueID string) string {
-	return filepath.Join(m.baseDir, m.worktreeDir, sanitizeFileName(issueID))
+	return filepath.Join(m.worktreeRoot(), sanitizeFileName(issueID))
+}
+
+// worktreeRoot returns the base directory where worktrees live.
+func (m *Manager) worktreeRoot() string {
+	if filepath.IsAbs(m.worktreeDir) {
+		return filepath.Clean(m.worktreeDir)
+	}
+	return filepath.Join(m.baseDir, m.worktreeDir)
+}
+
+// defaultWorktreeDir derives a sibling directory outside the repo tree.
+func defaultWorktreeDir(baseDir string) string {
+	cleanBase := filepath.Clean(baseDir)
+	baseName := filepath.Base(cleanBase)
+	if baseName == "." || baseName == string(filepath.Separator) || baseName == "" {
+		return "../workspaces"
+	}
+	return "../" + baseName + ".worktrees"
 }
 
 // lockIssue acquires an exclusive lock for the given issue.

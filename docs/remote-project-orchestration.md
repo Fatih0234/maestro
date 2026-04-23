@@ -89,8 +89,11 @@ cd /Volumes/T7/projects/contrabass-pi
    ```
 4. **Spawns agent** in that worktree directory
 5. **Agent works** on the remote project (sees its files, commits to its git)
-6. **Contrabass-PI merges** the agent's commits back to the remote's main branch
-7. **Cleans up** the worktree
+6. On success, orchestrator moves the issue to **`in_review`**
+7. Worktree is **kept intact** for human inspection
+8. Human decides when to merge to main and when to mark the issue done
+
+> **Important:** orchestrator does not auto-merge, auto-cleanup, or auto-close issues after runtime success.
 
 ## Git History Location
 

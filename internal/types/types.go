@@ -12,6 +12,7 @@ const (
 	StateClaimed
 	StateRunning
 	StateRetryQueued
+	StateInReview
 	StateReleased
 )
 
@@ -25,6 +26,8 @@ func (s IssueState) String() string {
 		return "running"
 	case StateRetryQueued:
 		return "retry_queued"
+	case StateInReview:
+		return "in_review"
 	case StateReleased:
 		return "released"
 	default:

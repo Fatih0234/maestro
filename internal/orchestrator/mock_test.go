@@ -20,13 +20,13 @@ type MockAgentRunner struct {
 	FailError    error
 	Delay        time.Duration
 	EventsToSend []types.AgentEvent
-	DoneError   error // Error to send on Done channel (nil = success)
+	DoneError    error // Error to send on Done channel (nil = success)
 
 	// Tracking
-	StartCalls    int
-	StopCalls     int
+	StartCalls     int
+	StopCalls      int
 	WorkspacePaths []string
-	Prompts       []string
+	Prompts        []string
 }
 
 type MockAgentProcess struct {
@@ -128,21 +128,23 @@ func (m *MockAgentRunner) GetStarted() []*MockAgentProcess {
 
 // MockTracker is a mock implementation of IssueTracker for testing.
 type MockTracker struct {
-	mu      sync.Mutex
-	issues  map[string]types.Issue
-	claimed map[string]bool
-	claims  map[string]int
+	mu       sync.Mutex
+	issues   map[string]types.Issue
+	claimed  map[string]bool
+	claims   map[string]int
 	releases map[string]int
 
 	// Configurable behavior
-	FetchError error
-	ClaimError error
+	FetchError  error
+	ClaimError  error
+	UpdateError error
+	ForcedFetch []types.Issue
 
 	// Call tracking
-	ClaimCalls     int
-	ReleaseCalls   int
-	UpdateCalls    int
-	UpdateState    map[string]types.IssueState
+	ClaimCalls   int
+	ReleaseCalls int
+	UpdateCalls  int
+	UpdateState  map[string]types.IssueState
 }
 
 var _ types.IssueTracker = (*MockTracker)(nil)
@@ -150,9 +152,10 @@ var _ types.IssueTracker = (*MockTracker)(nil)
 // NewMockTracker creates a new mock tracker.
 func NewMockTracker(issues []types.Issue) *MockTracker {
 	m := &MockTracker{
-		issues:   make(map[string]types.Issue),
-		claimed:  make(map[string]bool),
-		claims:   make(map[string]int),
+		issues:      make(map[string]types.Issue),
+		claimed:     make(map[string]bool),
+		claims:      make(map[string]int),
+		releases:    make(map[string]int),
 		UpdateState: make(map[string]types.IssueState),
 	}
 	for _, issue := range issues {
@@ -168,6 +171,9 @@ func (m *MockTracker) FetchIssues() ([]types.Issue, error) {
 
 	if m.FetchError != nil {
 		return nil, m.FetchError
+	}
+	if m.ForcedFetch != nil {
+		return append([]types.Issue(nil), m.ForcedFetch...), nil
 	}
 
 	result := make([]types.Issue, 0, len(m.issues))
@@ -245,6 +251,10 @@ func (m *MockTracker) GetIssue(id string) (types.Issue, error) {
 func (m *MockTracker) UpdateIssueState(id string, state types.IssueState) (types.Issue, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.UpdateError != nil {
+		return types.Issue{}, m.UpdateError
+	}
 
 	m.UpdateCalls++
 	issue, ok := m.issues[id]

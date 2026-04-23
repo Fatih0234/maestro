@@ -24,6 +24,18 @@ A minimal orchestrator for OpenCode coding agents. Poll a local board, create wo
 
 Configure `WORKFLOW.md` to point `workspace.base_dir` at any project you want to work on.
 
+## Lifecycle (human-review handoff)
+
+Contrabass-PI separates **runtime completion** from **business completion**:
+
+1. issue is claimed and run in an isolated worktree
+2. agent finishes runtime execution
+3. orchestrator marks issue as `in_review`
+4. worktree is preserved for manual inspection
+5. human decides when to merge and when to move issue to `done`
+
+By design, orchestrator success does **not** auto-merge, auto-cleanup, or auto-close the issue.
+
 ## Overview
 
 Inspired by [Contrabass](https://github.com/junhoyeo/contrabass), stripped to essentials:

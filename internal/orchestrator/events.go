@@ -7,21 +7,22 @@ import "time"
 // OrchestratorEvent type constants for high-level orchestrator events.
 // These are separate from low-level AgentEvent constants in the agent package.
 const (
-	EventPollStarted      = "poll_started"
-	EventIssueClaimed     = "issue.claimed"
-	EventWorkspaceCreated = "workspace.created"
-	EventPromptBuilt      = "prompt.built"
-	EventAgentStarted     = "agent.started"
-	EventTokensUpdated    = "tokens.updated"
-	EventAgentOutput      = "agent.output"
-	EventAgentFinished    = "agent.finished"
-	EventIssueCompleted   = "issue.completed"
-	EventIssueRetrying    = "issue.retrying"
-	EventBackoffQueued    = "backoff.queued"
-	EventStallDetected    = "stall.detected"
-	EventTimeoutDetected  = "timeout.detected"
-	EventPollCompleted    = "poll.completed"
-	EventMergeFailed      = "merge.failed"
+	EventPollStarted         = "poll_started"
+	EventIssueClaimed        = "issue.claimed"
+	EventWorkspaceCreated    = "workspace.created"
+	EventPromptBuilt         = "prompt.built"
+	EventAgentStarted        = "agent.started"
+	EventTokensUpdated       = "tokens.updated"
+	EventAgentOutput         = "agent.output"
+	EventAgentFinished       = "agent.finished"
+	EventIssueReadyForReview = "issue.ready_for_review"
+	EventIssueCompleted      = "issue.completed"
+	EventIssueRetrying       = "issue.retrying"
+	EventBackoffQueued       = "backoff.queued"
+	EventStallDetected       = "stall.detected"
+	EventTimeoutDetected     = "timeout.detected"
+	EventPollCompleted       = "poll.completed"
+	EventMergeFailed         = "merge.failed"
 )
 
 // Event payloads
@@ -70,6 +71,13 @@ type AgentFinishedPayload struct {
 	Error   string
 }
 
+// IssueReadyForReviewPayload is the payload for EventIssueReadyForReview.
+type IssueReadyForReviewPayload struct {
+	IssueID       string
+	Branch        string
+	WorkspacePath string
+}
+
 // IssueCompletedPayload is the payload for EventIssueCompleted.
 type IssueCompletedPayload struct {
 	IssueID string
@@ -91,9 +99,9 @@ type BackoffQueuedPayload struct {
 
 // StallDetectedPayload is the payload for EventStallDetected.
 type StallDetectedPayload struct {
-	IssueID     string
-	Reason      string
-	Detail      string
+	IssueID      string
+	Reason       string
+	Detail       string
 	LastEventAge time.Duration
 }
 

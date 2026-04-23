@@ -5,12 +5,14 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fatihkarahan/contrabass-pi/internal/agent"
 	"github.com/fatihkarahan/contrabass-pi/internal/config"
+	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
 	"github.com/fatihkarahan/contrabass-pi/internal/workspace"
 )
@@ -22,18 +24,19 @@ type Orchestrator struct {
 	Tracker     types.IssueTracker
 	Workspace   workspace.WorkspaceManager // interface
 	AgentRunner types.AgentRunner
+	Recorder    *diagnostics.Recorder
 	Events      chan types.OrchestratorEvent
 	State       *StateManager
 	Backoff     *BackoffManager
 
 	// Internal
-	ctx       context.Context
-	cancel    context.CancelFunc
+	ctx        context.Context
+	cancel     context.CancelFunc
 	promptTmpl string
 
 	// Goroutine tracking for graceful shutdown
-	wg     sync.WaitGroup
-	mu     sync.Mutex // protects running map
+	wg      sync.WaitGroup
+	mu      sync.Mutex                    // protects running map
 	running map[string]context.CancelFunc // issueID -> cancel func for that run's context
 	closed  bool
 }
@@ -61,6 +64,11 @@ func New(cfg *config.Config, tr types.IssueTracker, ws workspace.WorkspaceManage
 		promptTmpl:  cfg.Content,
 		running:     make(map[string]context.CancelFunc),
 	}
+}
+
+// SetRecorder wires a persistent diagnostics recorder into the orchestrator.
+func (o *Orchestrator) SetRecorder(recorder *diagnostics.Recorder) {
+	o.Recorder = recorder
 }
 
 // Run starts the orchestrator loop. It blocks until the context is cancelled.
@@ -152,6 +160,12 @@ func (o *Orchestrator) handleTimeout(run *RunState, elapsed time.Duration) {
 	attempt := run.Attempt + 1
 	entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("timeout after %v", elapsed))
 
+	if o.Recorder != nil {
+		postflightStatus, postflightWorktrees := o.captureGitState(o.workspaceBaseDir())
+		finalCommit := o.captureCommit(o.ctx, o.workspacePath(issueID))
+		_ = o.Recorder.FinalizeAttempt(issueID, run.Attempt, "timed_out", finalCommit, &entry.RetryAt, fmt.Errorf("timeout after %v", elapsed), postflightStatus, postflightWorktrees)
+	}
+
 	o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
 		IssueID: issueID,
 		Attempt: attempt,
@@ -184,15 +198,21 @@ func (o *Orchestrator) handleStall(run *RunState, lastEventAge time.Duration) {
 
 	// Emit stall event
 	o.emit(EventStallDetected, issueID, StallDetectedPayload{
-		IssueID:     issueID,
-		Reason:      "stall",
-		Detail:      fmt.Sprintf("no event received for %v", lastEventAge),
+		IssueID:      issueID,
+		Reason:       "stall",
+		Detail:       fmt.Sprintf("no event received for %v", lastEventAge),
 		LastEventAge: lastEventAge,
 	})
 
 	// Enqueue backoff
 	attempt := run.Attempt + 1
 	entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("stall: no event for %v", lastEventAge))
+
+	if o.Recorder != nil {
+		postflightStatus, postflightWorktrees := o.captureGitState(o.workspaceBaseDir())
+		finalCommit := o.captureCommit(o.ctx, o.workspacePath(issueID))
+		_ = o.Recorder.FinalizeAttempt(issueID, run.Attempt, "stalled", finalCommit, &entry.RetryAt, fmt.Errorf("stall: no event for %v", lastEventAge), postflightStatus, postflightWorktrees)
+	}
 
 	o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
 		IssueID: issueID,
@@ -217,12 +237,19 @@ func (o *Orchestrator) dispatchBackoff() {
 			return
 		}
 
+		// Consume the backoff entry before dispatching so it isn't dispatched
+		// repeatedly on every poll while the issue is already running.
+		o.Backoff.Remove(entry.IssueID)
+
 		// Re-claim the issue
 		issue, err := o.Tracker.ClaimIssue(entry.IssueID)
 		if err != nil {
-			// Issue no longer available, remove from backoff
-			o.Backoff.Remove(entry.IssueID)
+			// Issue no longer available for dispatch.
 			continue
+		}
+
+		if o.Recorder != nil {
+			_ = o.Recorder.EnsureIssue(issue)
 		}
 
 		// Start the run (reuse workspace if exists)
@@ -244,6 +271,10 @@ func (o *Orchestrator) dispatchReady() {
 	}
 
 	for _, issue := range issues {
+		if issue.State == types.StateInReview || issue.State == types.StateReleased {
+			continue
+		}
+
 		// Skip if at capacity
 		if o.Config.MaxConcurrency > 0 && o.State.Len() >= o.Config.MaxConcurrency {
 			return
@@ -263,6 +294,10 @@ func (o *Orchestrator) dispatchReady() {
 		claimed, err := o.Tracker.ClaimIssue(issue.ID)
 		if err != nil {
 			continue
+		}
+
+		if o.Recorder != nil {
+			_ = o.Recorder.EnsureIssue(claimed)
 		}
 
 		// Emit claimed
@@ -289,6 +324,18 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 	o.running[issueID] = runCancel
 	o.mu.Unlock()
 
+	branchName := o.branchName(issueID)
+	workspacePath := o.workspacePath(issueID)
+	prompt := o.buildPrompt(issue)
+	preflightStatus, preflightWorktreeList := o.captureGitState(o.workspaceBaseDir())
+
+	if o.Recorder != nil {
+		attemptRecorder, err := o.Recorder.BeginAttempt(issue, attempt, branchName, workspacePath, prompt, preflightStatus, preflightWorktreeList)
+		if err == nil && attemptRecorder != nil {
+			runCtx = diagnostics.WithAttemptRecorder(runCtx, attemptRecorder)
+		}
+	}
+
 	// 1. Create workspace
 	wsPath, err := o.Workspace.Create(runCtx, issue)
 	if err != nil {
@@ -297,16 +344,24 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 		o.handleStartError(issue, attempt, err, "workspace creation failed")
 		return
 	}
+	if wsPath != "" {
+		workspacePath = wsPath
+	}
+
+	if o.Recorder != nil {
+		if commit := o.captureCommit(runCtx, workspacePath); commit != "" {
+			_ = o.Recorder.UpdateAttemptStartCommit(issueID, attempt, commit)
+		}
+	}
 
 	o.State.UpdatePhase(issueID, types.PhasePreparingWorkspace)
 	o.emit(EventWorkspaceCreated, issueID, WorkspaceCreatedPayload{
 		IssueID: issueID,
-		Path:    wsPath,
+		Path:    workspacePath,
 	})
 
 	// 2. Build prompt from template
 	o.State.UpdatePhase(issueID, types.PhaseBuildingPrompt)
-	prompt := o.buildPrompt(issue)
 	o.emit(EventPromptBuilt, issueID, PromptBuiltPayload{
 		IssueID: issueID,
 		Length:  len(prompt),
@@ -314,7 +369,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 
 	// 3. Start agent
 	o.State.UpdatePhase(issueID, types.PhaseLaunchingAgentProcess)
-	proc, err := o.AgentRunner.Start(runCtx, issue, wsPath, prompt)
+	proc, err := o.AgentRunner.Start(runCtx, issue, workspacePath, prompt)
 	if err != nil {
 		runCancel()
 		o.removeRunning(issueID)
@@ -325,6 +380,10 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 	// 4. Add to state
 	o.State.Add(issueID, issue, attempt, proc)
 	o.State.UpdatePhase(issueID, types.PhaseInitializingSession)
+
+	if o.Recorder != nil {
+		_ = o.Recorder.UpdateAttemptLaunchInfo(issueID, attempt, proc.PID, proc.SessionID, proc.ServerURL)
+	}
 
 	// 5. Emit agent started
 	o.emit(EventAgentStarted, issueID, AgentStartedPayload{
@@ -350,12 +409,19 @@ func (o *Orchestrator) removeRunning(issueID string) {
 
 // handleStartError handles errors during startRun.
 func (o *Orchestrator) handleStartError(issue types.Issue, attempt int, err error, reason string) {
+	issueID := issue.ID
 	o.State.SetError(issue.ID, err.Error())
 	o.State.UpdatePhase(issue.ID, types.PhaseFailed)
 	o.State.Remove(issue.ID)
 
 	// Enqueue for retry
 	entry := o.Backoff.Enqueue(issue.ID, attempt, fmt.Sprintf("%s: %v", reason, err))
+
+	if o.Recorder != nil {
+		preflightStatus, preflightWorktreeList := o.captureGitState(o.workspaceBaseDir())
+		finalCommit := o.captureCommit(o.ctx, o.workspacePath(issueID))
+		_ = o.Recorder.FinalizeAttempt(issueID, attempt, "retry_queued", finalCommit, &entry.RetryAt, err, preflightStatus, preflightWorktreeList)
+	}
 
 	o.emit(EventAgentFinished, issue.ID, AgentFinishedPayload{
 		IssueID: issue.ID,
@@ -463,22 +529,44 @@ func (o *Orchestrator) handleAgentDone(issueID string, runErr error) {
 	if runErr == nil {
 		// Success
 		o.State.UpdatePhase(issueID, types.PhaseSucceeded)
-		o.State.Remove(issueID)
 
-		// Mark issue as done
-		_, _ = o.Tracker.UpdateIssueState(issueID, types.StateReleased)
+		// Runtime completion hands off to human review.
+		// Business completion (done) is human-only.
+		if _, err := o.Tracker.UpdateIssueState(issueID, types.StateInReview); err != nil {
+			attempt := run.Attempt + 1
+			o.State.UpdatePhase(issueID, types.PhaseFailed)
+			o.State.Remove(issueID)
 
-		// Merge worktree branch to main BEFORE cleanup
-		// This is non-fatal - we log failures but still proceed
-		if mergeErr := o.Workspace.MergeToMain(o.ctx, issueID); mergeErr != nil {
-			o.emit(EventMergeFailed, issueID, MergeFailedPayload{
+			entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("review handoff failed: %v", err))
+			postflightStatus, postflightWorktrees := o.captureGitState(o.workspaceBaseDir())
+			finalCommit := o.captureCommit(o.ctx, o.workspacePath(issueID))
+			if o.Recorder != nil {
+				_ = o.Recorder.FinalizeAttempt(issueID, run.Attempt, "retry_queued", finalCommit, &entry.RetryAt, err, postflightStatus, postflightWorktrees)
+			}
+
+			o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
 				IssueID: issueID,
-				Error:   mergeErr.Error(),
+				Success: false,
+				Error:   err.Error(),
 			})
+			o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
+				IssueID: issueID,
+				Attempt: attempt,
+				RetryAt: entry.RetryAt,
+			})
+			return
 		}
 
-		// Cleanup workspace
-		_ = o.Workspace.Cleanup(o.ctx, issueID)
+		o.State.Remove(issueID)
+
+		workspacePath := o.workspacePath(issueID)
+		branchName := o.branchName(issueID)
+		finalCommit := o.captureCommit(o.ctx, workspacePath)
+
+		postflightStatus, postflightWorktrees := o.captureGitState(o.workspaceBaseDir())
+		if o.Recorder != nil {
+			_ = o.Recorder.FinalizeAttempt(issueID, run.Attempt, "awaiting_review", finalCommit, nil, nil, postflightStatus, postflightWorktrees)
+		}
 
 		// Remove from backoff
 		o.Backoff.Remove(issueID)
@@ -488,7 +576,11 @@ func (o *Orchestrator) handleAgentDone(issueID string, runErr error) {
 			Success: true,
 			Error:   "",
 		})
-		o.emit(EventIssueCompleted, issueID, IssueCompletedPayload{IssueID: issueID})
+		o.emit(EventIssueReadyForReview, issueID, IssueReadyForReviewPayload{
+			IssueID:       issueID,
+			Branch:        branchName,
+			WorkspacePath: workspacePath,
+		})
 	} else {
 		// Failure - enqueue retry
 		attempt := run.Attempt + 1
@@ -496,6 +588,12 @@ func (o *Orchestrator) handleAgentDone(issueID string, runErr error) {
 		o.State.Remove(issueID)
 
 		entry := o.Backoff.Enqueue(issueID, attempt, runErr.Error())
+
+		postflightStatus, postflightWorktrees := o.captureGitState(o.workspaceBaseDir())
+		finalCommit := o.captureCommit(o.ctx, o.workspacePath(issueID))
+		if o.Recorder != nil {
+			_ = o.Recorder.FinalizeAttempt(issueID, run.Attempt, "retry_queued", finalCommit, &entry.RetryAt, runErr, postflightStatus, postflightWorktrees)
+		}
 
 		o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
 			IssueID: issueID,
@@ -515,8 +613,12 @@ func (o *Orchestrator) emit(eventType, issueID string, payload interface{}) {
 	event := types.OrchestratorEvent{
 		Type:      eventType,
 		IssueID:   issueID,
-		Timestamp: time.Now(),
+		Timestamp: time.Now().UTC(),
 		Payload:   payload,
+	}
+
+	if o.Recorder != nil {
+		_ = o.Recorder.RecordEvent(event)
 	}
 
 	select {
@@ -563,6 +665,11 @@ func (o *Orchestrator) shutdown() error {
 	// Close agent runner
 	_ = o.AgentRunner.Close()
 
+	// Close recorder after all agents have stopped.
+	if o.Recorder != nil {
+		_ = o.Recorder.Close()
+	}
+
 	// Close event channel
 	close(o.Events)
 
@@ -577,6 +684,76 @@ func (o *Orchestrator) Stop() {
 		o.cancel()
 	}
 	o.mu.Unlock()
+}
+
+type workspaceLocator interface {
+	Path(issueID string) string
+	BaseDir() string
+}
+
+func (o *Orchestrator) workspacePath(issueID string) string {
+	if locator, ok := o.Workspace.(workspaceLocator); ok {
+		return locator.Path(issueID)
+	}
+	return ""
+}
+
+func (o *Orchestrator) workspaceBaseDir() string {
+	if locator, ok := o.Workspace.(workspaceLocator); ok {
+		return locator.BaseDir()
+	}
+	return ""
+}
+
+func (o *Orchestrator) branchName(issueID string) string {
+	return o.Config.Workspace.BranchPrefix + sanitizeBranchName(issueID)
+}
+
+func sanitizeBranchName(id string) string {
+	var result strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '/' || r == '-' {
+			result.WriteRune(r)
+		} else {
+			result.WriteRune('-')
+		}
+	}
+	return result.String()
+}
+
+func (o *Orchestrator) captureGitState(baseDir string) (string, string) {
+	if strings.TrimSpace(baseDir) == "" {
+		return "", ""
+	}
+	return captureGitOutput(o.ctx, baseDir, "status", "--short"), captureGitOutput(o.ctx, baseDir, "worktree", "list")
+}
+
+func (o *Orchestrator) captureCommit(ctx context.Context, dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func captureGitOutput(ctx context.Context, dir string, args ...string) string {
+	if strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		if text != "" {
+			return text + "\nerror: " + err.Error()
+		}
+		return "error: " + err.Error()
+	}
+	return text
 }
 
 // extractTextContent extracts text content from an agent event.

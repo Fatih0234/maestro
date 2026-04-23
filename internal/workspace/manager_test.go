@@ -54,6 +54,19 @@ func TestManager_Defaults(t *testing.T) {
 	}
 }
 
+func TestManager_DefaultWorktreeDirLivesOutsideBaseDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	manager := New(Config{BaseDir: tmpDir})
+
+	path := manager.Path("CB-1")
+	if filepath.Dir(path) == tmpDir {
+		t.Fatalf("default workspace path %q should not live inside base dir %q", path, tmpDir)
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("expected default workspace path to be absolute, got %q", path)
+	}
+}
+
 func TestManager_Path(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -170,6 +183,50 @@ func TestManager_Create_AlreadyExists(t *testing.T) {
 	list := manager.List()
 	if len(list) != 1 {
 		t.Errorf("expected 1 workspace, got %d", len(list))
+	}
+}
+
+func TestManager_Create_ReusesExistingBranchAfterCleanup(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
+
+	manager := New(Config{
+		BaseDir:      tmpDir,
+		WorktreeDir:  "workspaces",
+		BranchPrefix: "opencode/",
+	})
+
+	issue := types.Issue{
+		ID:          "CB-1",
+		Identifier:  "CB-1",
+		Title:       "Test Issue",
+		Description: "Test description",
+	}
+
+	firstPath, err := manager.Create(context.Background(), issue)
+	if err != nil {
+		t.Fatalf("first Create failed: %v", err)
+	}
+
+	if err := manager.Cleanup(context.Background(), issue.ID); err != nil {
+		t.Fatalf("Cleanup failed: %v", err)
+	}
+
+	secondPath, err := manager.Create(context.Background(), issue)
+	if err != nil {
+		t.Fatalf("second Create should reuse existing branch: %v", err)
+	}
+
+	if secondPath != firstPath {
+		t.Fatalf("second Create path = %q, want %q", secondPath, firstPath)
+	}
+
+	if !manager.Exists(issue.ID) {
+		t.Fatal("expected workspace to exist after recreating from existing branch")
+	}
+
+	if _, err := os.Stat(secondPath); err != nil {
+		t.Fatalf("workspace directory not recreated: %v", err)
 	}
 }
 
@@ -384,8 +441,8 @@ func TestSanitizeBranchName(t *testing.T) {
 		{"CB/1", "CB/1"}, // Forward slash is allowed (creates subdirectory)
 		{"CB-1-extra", "CB-1-extra"},
 		{"CB 1", "CB-1"},
-		{"CB@1", "CB-1"},  // @ replaced with hyphen (could be ref syntax)
-		{"CB#1", "CB-1"},  // # replaced with hyphen (comment character)
+		{"CB@1", "CB-1"}, // @ replaced with hyphen (could be ref syntax)
+		{"CB#1", "CB-1"}, // # replaced with hyphen (comment character)
 		{"CB!1", "CB-1"},
 		{"CB:1", "CB-1"},
 		{"CB's Issue", "CB-s-Issue"},
@@ -393,7 +450,7 @@ func TestSanitizeBranchName(t *testing.T) {
 		{"ABC123xyz", "ABC123xyz"},
 		{"UPPERCASE", "UPPERCASE"},
 		{"with spaces", "with-spaces"},
-		{"with\ttabs", "with-tabs"}, // tabs become single hyphen
+		{"with\ttabs", "with-tabs"},         // tabs become single hyphen
 		{"with\nnewlines", "with-newlines"}, // newlines become single hyphen
 	}
 

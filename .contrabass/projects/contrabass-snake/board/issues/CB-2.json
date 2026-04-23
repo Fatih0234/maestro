@@ -3,11 +3,11 @@
   "identifier": "CB-2",
   "title": "Add restart hint below the game",
   "description": "Show a small helper line below the canvas that says 'Press R to restart'. Keep gameplay unchanged.",
-  "state": "todo",
+  "state": "in_review",
   "labels": [
     "smoke-test"
   ],
   "url": "local://CB-2",
   "created_at": "2026-04-22T20:00:00Z",
-  "updated_at": "2026-04-22T20:10:55Z"
+  "updated_at": "2026-04-22T21:12:44.90676Z"
 }

@@ -21,6 +21,10 @@ func testConfig() *config.Config {
 		AgentTimeoutMs:    5000,
 		StallTimeoutMs:    5000,
 		Content:           "Issue: {{ issue.title }}\n\n{{ issue.description }}",
+		Workspace: config.WorkspaceConfig{
+			BaseDir:      "/tmp/repo",
+			BranchPrefix: "opencode/",
+		},
 	}
 }
 
@@ -30,8 +34,11 @@ type MockWorkspace struct {
 	workspaces map[string]string
 	created    map[string]bool
 	cleaned    map[string]int
+	merged     map[string]int
+	baseDir    string
 	createErr  error
 	cleanErr   error
+	mergeErr   error
 }
 
 var _ workspace.WorkspaceManager = (*MockWorkspace)(nil)
@@ -39,8 +46,10 @@ var _ workspace.WorkspaceManager = (*MockWorkspace)(nil)
 func NewMockWorkspace() *MockWorkspace {
 	return &MockWorkspace{
 		workspaces: make(map[string]string),
-		created:   make(map[string]bool),
-		cleaned:   make(map[string]int),
+		created:    make(map[string]bool),
+		cleaned:    make(map[string]int),
+		merged:     make(map[string]int),
+		baseDir:    "/tmp/repo",
 	}
 }
 
@@ -69,6 +78,16 @@ func (w *MockWorkspace) Cleanup(ctx context.Context, issueID string) error {
 	return nil
 }
 
+func (w *MockWorkspace) MergeToMain(ctx context.Context, issueID string) error {
+	if w.mergeErr != nil {
+		return w.mergeErr
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.merged[issueID]++
+	return nil
+}
+
 func (w *MockWorkspace) Exists(issueID string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -79,6 +98,25 @@ func (w *MockWorkspace) CleanupCount(issueID string) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.cleaned[issueID]
+}
+
+func (w *MockWorkspace) MergeCount(issueID string) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.merged[issueID]
+}
+
+func (w *MockWorkspace) Path(issueID string) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if path, ok := w.workspaces[issueID]; ok {
+		return path
+	}
+	return "/tmp/workspace/" + issueID
+}
+
+func (w *MockWorkspace) BaseDir() string {
+	return w.baseDir
 }
 
 // EventCollector collects events for testing.
@@ -360,6 +398,32 @@ func TestOrchestrator_DispatchReady_SkipsBackoffIssues(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_DispatchReady_SkipsReviewIssues_DefenseInDepth(t *testing.T) {
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue 1")})
+	tracker.ForcedFetch = []types.Issue{
+		{
+			ID:          "CB-1",
+			Identifier:  "CB-1",
+			Title:       "Issue 1",
+			Description: "desc",
+			State:       types.StateInReview,
+		},
+	}
+	runner := NewMockAgentRunner()
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	orch.poll()
+
+	if got := tracker.ClaimCount("CB-1"); got != 0 {
+		t.Errorf("ClaimCount(CB-1) = %d, want 0 for in_review issue", got)
+	}
+	if got := runner.StartCalls; got != 0 {
+		t.Errorf("StartCalls = %d, want 0 for in_review issue", got)
+	}
+}
+
 func TestOrchestrator_HandleAgentDone_Success(t *testing.T) {
 	cfg := testConfig()
 	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
@@ -375,11 +439,108 @@ func TestOrchestrator_HandleAgentDone_Success(t *testing.T) {
 	// Wait for agent to finish
 	time.Sleep(50 * time.Millisecond)
 
-	if !events.Has(EventIssueCompleted) {
-		t.Error("Expected IssueCompleted event")
+	if !events.Has(EventIssueReadyForReview) {
+		t.Error("Expected IssueReadyForReview event")
+	}
+	if events.Has(EventIssueCompleted) {
+		t.Error("Did not expect IssueCompleted event on runtime success")
 	}
 	if !events.Has(EventAgentFinished) {
 		t.Error("Expected AgentFinished event")
+	}
+	if state := tracker.UpdateState["CB-1"]; state != types.StateInReview {
+		t.Errorf("issue state = %v, want %v", state, types.StateInReview)
+	}
+	if got := ws.MergeCount("CB-1"); got != 0 {
+		t.Errorf("MergeToMain called %d times, want 0", got)
+	}
+	if got := ws.CleanupCount("CB-1"); got != 0 {
+		t.Errorf("Cleanup called %d times, want 0", got)
+	}
+
+	var handoffPayload IssueReadyForReviewPayload
+	foundHandoff := false
+	for _, evt := range events.GetByIssue("CB-1") {
+		if evt.Type != EventIssueReadyForReview {
+			continue
+		}
+		payload, ok := evt.Payload.(IssueReadyForReviewPayload)
+		if !ok {
+			t.Fatalf("unexpected payload type %T", evt.Payload)
+		}
+		handoffPayload = payload
+		foundHandoff = true
+		break
+	}
+	if !foundHandoff {
+		t.Fatal("ready_for_review payload not found")
+	}
+	if handoffPayload.Branch != "opencode/CB-1" {
+		t.Errorf("handoff branch = %q, want opencode/CB-1", handoffPayload.Branch)
+	}
+	if handoffPayload.WorkspacePath == "" {
+		t.Error("handoff workspace path should not be empty")
+	}
+}
+
+func TestOrchestrator_HandleAgentDone_HandoffStateUpdateFailureQueuesRetry(t *testing.T) {
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
+	tracker.UpdateError = errors.New("tracker unavailable")
+	runner := NewMockAgentRunner()
+	runner.EventsToSend = []types.AgentEvent{{Type: "turn/completed"}}
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	events := NewEventCollector(orch.Events)
+
+	orch.poll()
+
+	// Wait for agent to finish and handoff attempt to fail.
+	time.Sleep(50 * time.Millisecond)
+
+	if events.Has(EventIssueReadyForReview) {
+		t.Error("did not expect ready_for_review event when tracker handoff fails")
+	}
+	if !events.Has(EventIssueRetrying) {
+		t.Error("expected issue.retrying event when review handoff fails")
+	}
+	if orch.Backoff.Len() != 1 {
+		t.Errorf("Backoff.Len() = %d, want 1", orch.Backoff.Len())
+	}
+	if got := ws.MergeCount("CB-1"); got != 0 {
+		t.Errorf("MergeToMain called %d times, want 0", got)
+	}
+	if got := ws.CleanupCount("CB-1"); got != 0 {
+		t.Errorf("Cleanup called %d times, want 0", got)
+	}
+}
+
+func TestOrchestrator_DispatchBackoff_ConsumesReadyEntryOnce(t *testing.T) {
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
+	runner := NewMockAgentRunner()
+	runner.Delay = 200 * time.Millisecond
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	defer orch.Stop()
+
+	entry := orch.Backoff.Enqueue("CB-1", 1, "boom")
+	entry.RetryAt = time.Now().Add(-time.Second)
+
+	orch.dispatchBackoff()
+	if got := runner.StartCalls; got != 1 {
+		t.Fatalf("StartCalls after first dispatch = %d, want 1", got)
+	}
+
+	// A second dispatch cycle should not start a duplicate run for the same entry.
+	orch.dispatchBackoff()
+	if got := runner.StartCalls; got != 1 {
+		t.Fatalf("StartCalls after second dispatch = %d, want 1", got)
+	}
+	if got := tracker.ClaimCount("CB-1"); got != 1 {
+		t.Fatalf("ClaimCount(CB-1) = %d, want 1", got)
 	}
 }
 

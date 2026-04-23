@@ -3,7 +3,9 @@ package tui
 
 import (
 	"testing"
+	"time"
 
+	"github.com/fatihkarahan/contrabass-pi/internal/orchestrator"
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
 )
 
@@ -11,6 +13,9 @@ func TestNewModel(t *testing.T) {
 	m := NewModel()
 	if m.agents == nil {
 		t.Error("agents map should be initialized")
+	}
+	if m.reviews == nil {
+		t.Error("reviews map should be initialized")
 	}
 	if m.backoffs == nil {
 		t.Error("backoffs map should be initialized")
@@ -22,9 +27,9 @@ func TestNewModel(t *testing.T) {
 
 func TestDurationString(t *testing.T) {
 	tests := []struct {
-		name     string
-		d        string
-		want     string
+		name string
+		d    string
+		want string
 	}{
 		{"zero", "0s", "0s"},
 		{"seconds", "30s", "30s"},
@@ -216,6 +221,56 @@ func TestDisplayIssueID(t *testing.T) {
 				t.Errorf("displayIssueID(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestModelApplyOrchestratorEvent_IssueReadyForReview(t *testing.T) {
+	m := NewModel()
+	m.agents["CB-1"] = AgentRow{IssueID: "CB-1"}
+
+	event := types.OrchestratorEvent{
+		Type:      orchestrator.EventIssueReadyForReview,
+		IssueID:   "CB-1",
+		Timestamp: time.Now(),
+		Payload: orchestrator.IssueReadyForReviewPayload{
+			IssueID:       "CB-1",
+			Branch:        "contrabass/CB-1",
+			WorkspacePath: "/tmp/ws/CB-1",
+		},
+	}
+
+	m = m.applyOrchestratorEvent(event)
+
+	if _, ok := m.agents["CB-1"]; ok {
+		t.Fatal("agent should be removed after review handoff")
+	}
+	review, ok := m.reviews["CB-1"]
+	if !ok {
+		t.Fatal("review entry not created")
+	}
+	if review.Branch != "contrabass/CB-1" {
+		t.Fatalf("review branch = %q, want contrabass/CB-1", review.Branch)
+	}
+	if review.WorkspacePath != "/tmp/ws/CB-1" {
+		t.Fatalf("review workspace path = %q, want /tmp/ws/CB-1", review.WorkspacePath)
+	}
+}
+
+func TestModelApplyOrchestratorEvent_IssueCompletedRemovesReviewEntry(t *testing.T) {
+	m := NewModel()
+	m.reviews["CB-1"] = ReviewRow{IssueID: "CB-1", Branch: "contrabass/CB-1", WorkspacePath: "/tmp/ws/CB-1"}
+
+	event := types.OrchestratorEvent{
+		Type:      orchestrator.EventIssueCompleted,
+		IssueID:   "CB-1",
+		Timestamp: time.Now(),
+		Payload:   orchestrator.IssueCompletedPayload{IssueID: "CB-1"},
+	}
+
+	m = m.applyOrchestratorEvent(event)
+
+	if _, ok := m.reviews["CB-1"]; ok {
+		t.Fatal("review entry should be removed when issue is completed")
 	}
 }
 

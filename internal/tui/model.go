@@ -23,6 +23,7 @@ type Model struct {
 
 	// State maps
 	agents   map[string]AgentRow
+	reviews  map[string]ReviewRow
 	backoffs map[string]BackoffRow
 	stats    HeaderStats
 
@@ -31,13 +32,14 @@ type Model struct {
 
 	// Sorting caches
 	agentKeys      []string
+	reviewKeys     []string
 	backoffKeys    []string
 	agentSortDirty bool
 
 	// Event log
-	eventLog    []EventLogEntry
-	maxLogSize  int
-	scrollPos   int
+	eventLog   []EventLogEntry
+	maxLogSize int
+	scrollPos  int
 
 	// State
 	quitting bool
@@ -67,6 +69,14 @@ type BackoffRow struct {
 	Error   string
 }
 
+// ReviewRow holds display data for one review handoff entry.
+type ReviewRow struct {
+	IssueID       string
+	Branch        string
+	WorkspacePath string
+	ReadyAt       time.Time
+}
+
 // HeaderStats holds the header statistics.
 type HeaderStats struct {
 	RunningAgents int
@@ -87,6 +97,7 @@ type EventLogEntry struct {
 func NewModel() Model {
 	return Model{
 		agents:     make(map[string]AgentRow),
+		reviews:    make(map[string]ReviewRow),
 		backoffs:   make(map[string]BackoffRow),
 		maxLogSize: 100,
 		eventLog:   make([]EventLogEntry, 0, 100),
@@ -162,12 +173,14 @@ func (m Model) View() string {
 	// Render all sections
 	header := m.renderHeader()
 	table := m.renderTable()
+	review := m.renderReviewQueue()
 	backoff := m.renderBackoffQueue()
 	events := m.renderEventLog()
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		lipgloss.NewStyle().PaddingBottom(1).Render(table),
+		lipgloss.NewStyle().PaddingBottom(1).Render(review),
 		lipgloss.NewStyle().PaddingBottom(1).Render(backoff),
 		lipgloss.NewStyle().PaddingBottom(1).Render(events),
 	)
@@ -220,6 +233,33 @@ func (m Model) renderTable() string {
 
 	m.table = m.table.Update(sessionRows, "")
 	return m.table.View()
+}
+
+// renderReviewQueue renders issues waiting for human review.
+func (m Model) renderReviewQueue() string {
+	if len(m.reviews) == 0 {
+		return ""
+	}
+
+	headerStyle := lipgloss.NewStyle().Faint(true)
+	header := headerStyle.Render(fmt.Sprintf("Ready for Human Review                             [%d]\n", len(m.reviews)))
+
+	rows := ""
+	for _, issueID := range m.sortedReviewKeys() {
+		row := m.reviews[issueID]
+		branch := row.Branch
+		if branch == "" {
+			branch = "-"
+		}
+		workspacePath := row.WorkspacePath
+		if workspacePath == "" {
+			workspacePath = "(workspace path unavailable)"
+		}
+		rows += fmt.Sprintf("  %s  branch=%s\n", row.IssueID, branch)
+		rows += fmt.Sprintf("      %s\n", workspacePath)
+	}
+
+	return header + rows
 }
 
 // renderBackoffQueue renders the backoff queue section.
@@ -371,8 +411,30 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 			}
 		}
 
+	case orchestrator.EventIssueReadyForReview:
+		if payload, ok := event.Payload.(orchestrator.IssueReadyForReviewPayload); ok {
+			issueID := payload.IssueID
+			if issueID == "" {
+				issueID = event.IssueID
+			}
+			if issueID != "" {
+				m.reviews[issueID] = ReviewRow{
+					IssueID:       issueID,
+					Branch:        payload.Branch,
+					WorkspacePath: payload.WorkspacePath,
+					ReadyAt:       event.Timestamp,
+				}
+				m.reviewKeys = nil
+				delete(m.agents, issueID)
+				delete(m.backoffs, issueID)
+				m.agentSortDirty = true
+			}
+		}
+
 	case orchestrator.EventIssueCompleted:
 		delete(m.agents, event.IssueID)
+		delete(m.reviews, event.IssueID)
+		m.reviewKeys = nil
 		delete(m.backoffs, event.IssueID)
 		m.agentSortDirty = true
 
@@ -459,6 +521,18 @@ func (m *Model) sortedAgentKeys() []string {
 		m.agentSortDirty = false
 	}
 	return m.agentKeys
+}
+
+// sortedReviewKeys returns sorted review keys.
+func (m *Model) sortedReviewKeys() []string {
+	if len(m.reviewKeys) != len(m.reviews) {
+		m.reviewKeys = m.reviewKeys[:0]
+		for issueID := range m.reviews {
+			m.reviewKeys = append(m.reviewKeys, issueID)
+		}
+		sort.Strings(m.reviewKeys)
+	}
+	return m.reviewKeys
 }
 
 // sortedBackoffKeys returns sorted backoff keys.

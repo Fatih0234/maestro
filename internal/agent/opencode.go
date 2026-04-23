@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
 )
 
@@ -295,10 +296,25 @@ func (r *OpenCodeRunner) startServer(
 	if err != nil {
 		return nil, fmt.Errorf("create opencode stdout pipe: %w", err)
 	}
-	cmd.Stderr = io.Discard
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("create opencode stderr pipe: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start opencode server: %w", err)
+	}
+
+	attemptRecorder, _ := diagnostics.AttemptFromContext(ctx)
+	stdoutWriter := io.Discard
+	stderrWriter := io.Discard
+	if attemptRecorder != nil {
+		if w := attemptRecorder.StdoutWriter(); w != nil {
+			stdoutWriter = w
+		}
+		if w := attemptRecorder.StderrWriter(); w != nil {
+			stderrWriter = w
+		}
 	}
 
 	urlCh := make(chan string, 1)
@@ -307,10 +323,13 @@ func (r *OpenCodeRunner) startServer(
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		foundURL := false
 		for {
 			select {
 			case <-ctx.Done():
-				errCh <- ctx.Err()
+				if !foundURL {
+					errCh <- ctx.Err()
+				}
 				return
 			default:
 			}
@@ -320,18 +339,34 @@ func (r *OpenCodeRunner) startServer(
 			}
 
 			line := scanner.Text()
+			_, _ = fmt.Fprintln(stdoutWriter, line)
+
+			if foundURL {
+				continue
+			}
 			if strings.Contains(line, "listening on http://") || strings.Contains(line, "listening on https://") {
 				if url := extractListeningURL(line); url != "" {
-					urlCh <- url
-					return
+					select {
+					case urlCh <- url:
+					default:
+					}
+					foundURL = true
 				}
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			errCh <- err
+			if !foundURL {
+				errCh <- err
+			}
 			return
 		}
-		errCh <- errors.New("opencode server exited before emitting listening URL")
+		if !foundURL {
+			errCh <- errors.New("opencode server exited before emitting listening URL")
+		}
+	}()
+
+	go func() {
+		_, _ = io.Copy(stderrWriter, stderr)
 	}()
 
 	timer := time.NewTimer(r.timeout)

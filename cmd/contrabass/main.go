@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbletea"
 	"github.com/fatihkarahan/contrabass-pi/internal/agent"
 	"github.com/fatihkarahan/contrabass-pi/internal/config"
+	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
 	"github.com/fatihkarahan/contrabass-pi/internal/orchestrator"
 	"github.com/fatihkarahan/contrabass-pi/internal/tui"
 	"github.com/fatihkarahan/contrabass-pi/internal/tracker"
@@ -68,8 +69,16 @@ func main() {
 		cfg.OpenCode.ConfigDir,
 	)
 
+	// Create persistent diagnostics recorder
+	recorder, err := diagnostics.NewRecorder(boardDir)
+	if err != nil {
+		log.Fatalf("failed to initialize diagnostics recorder: %v", err)
+	}
+	defer recorder.Close()
+
 	// Create orchestrator
 	orch := orchestrator.New(cfg, tr, wsMgr, agentRunner)
+	orch.SetRecorder(recorder)
 
 	// Context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
