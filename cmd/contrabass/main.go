@@ -3,21 +3,25 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"io"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fatihkarahan/contrabass-pi/internal/agent"
 	"github.com/fatihkarahan/contrabass-pi/internal/config"
 	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
 	"github.com/fatihkarahan/contrabass-pi/internal/orchestrator"
-	"github.com/fatihkarahan/contrabass-pi/internal/tui"
 	"github.com/fatihkarahan/contrabass-pi/internal/tracker"
+	"github.com/fatihkarahan/contrabass-pi/internal/tui"
+	"github.com/fatihkarahan/contrabass-pi/internal/types"
 	"github.com/fatihkarahan/contrabass-pi/internal/workspace"
 )
 
@@ -28,18 +32,94 @@ var (
 	logLevel   = flag.String("log-level", "info", "log level (debug/info/warn/error)")
 )
 
+const tuiShutdownTimeout = 5 * time.Second
+
+type logSeverity int
+
+const (
+	severityDebug logSeverity = iota
+	severityInfo
+	severityWarn
+	severityError
+)
+
+type cliLogger struct {
+	level logSeverity
+	mu    sync.Mutex
+}
+
+func newCLILogger(level logSeverity) *cliLogger {
+	return &cliLogger{level: level}
+}
+
+func parseLogLevel(value string) (logSeverity, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "debug":
+		return severityDebug, nil
+	case "info":
+		return severityInfo, nil
+	case "warn":
+		return severityWarn, nil
+	case "error":
+		return severityError, nil
+	default:
+		return severityInfo, fmt.Errorf("invalid log level %q (expected debug/info/warn/error)", value)
+	}
+}
+
+func (l *cliLogger) logf(w io.Writer, level logSeverity, format string, args ...any) {
+	if l == nil || level < l.level {
+		return
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	fmt.Fprintf(w, format+"\n", args...)
+}
+
+func (l *cliLogger) Debugf(format string, args ...any) {
+	l.logf(os.Stdout, severityDebug, format, args...)
+}
+
+func (l *cliLogger) Infof(format string, args ...any) {
+	l.logf(os.Stdout, severityInfo, format, args...)
+}
+
+func (l *cliLogger) Warnf(format string, args ...any) {
+	l.logf(os.Stderr, severityWarn, format, args...)
+}
+
+func (l *cliLogger) Errorf(format string, args ...any) {
+	l.logf(os.Stderr, severityError, format, args...)
+}
+
 func main() {
 	flag.Parse()
+
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	level, err := parseLogLevel(*logLevel)
+	if err != nil {
+		return err
+	}
+
+	logger := newCLILogger(level)
 
 	// Load config
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	log.Printf("Starting Contrabass with config: %s", *configPath)
-	log.Printf("  max_concurrency: %d", cfg.MaxConcurrency)
-	log.Printf("  poll_interval: %dms", cfg.PollIntervalMs)
+	logger.Infof("Starting Contrabass with config: %s", *configPath)
+	logger.Infof("  max_concurrency: %d", cfg.MaxConcurrency)
+	logger.Infof("  poll_interval: %dms", cfg.PollIntervalMs)
 
 	// Create tracker
 	boardDir := cfg.Tracker.BoardDir
@@ -72,7 +152,7 @@ func main() {
 	// Create persistent diagnostics recorder
 	recorder, err := diagnostics.NewRecorder(boardDir)
 	if err != nil {
-		log.Fatalf("failed to initialize diagnostics recorder: %v", err)
+		return fmt.Errorf("failed to initialize diagnostics recorder: %w", err)
 	}
 	defer recorder.Close()
 
@@ -87,17 +167,21 @@ func main() {
 	// Handle signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 
-	// Start the TUI if enabled
-	if !*noTUI {
-		runWithTUI(ctx, orch, sigChan)
-	} else {
-		runHeadless(ctx, orch, sigChan)
+	if *dryRun {
+		return runDryRun(ctx, orch, sigChan, logger)
 	}
+
+	if !*noTUI {
+		return runWithTUI(ctx, orch, sigChan, logger)
+	}
+
+	return runHeadless(ctx, orch, sigChan, logger)
 }
 
 // runWithTUI starts the orchestrator with a Bubble Tea TUI.
-func runWithTUI(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal) {
+func runWithTUI(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal, logger *cliLogger) error {
 	// Create TUI model
 	tuiModel := tui.NewModel()
 
@@ -107,57 +191,111 @@ func runWithTUI(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-
 	// Start event bridge - send orchestrator events to TUI
 	tui.StartEventBridge(ctx, p, orch.Events)
 
-	// Start orchestrator in background
-	errChan := make(chan error, 1)
+	orchDone := make(chan error, 1)
 	go func() {
-		if err := orch.Run(); err != nil {
-			errChan <- err
-		}
-	}()
+		defer func() {
+			if r := recover(); r != nil {
+				orchDone <- fmt.Errorf("orchestrator panic: %v", r)
+				p.Quit()
+			}
+		}()
 
-	// Run TUI in main goroutine
-	go func() {
-		if err := p.Start(); err != nil {
-			errChan <- err
-		}
-	}()
-
-	// Wait for signal or error
-	select {
-	case sig := <-sigChan:
-		log.Printf("Received signal: %v", sig)
-		orch.Stop()
+		orchDone <- orch.Run()
 		p.Quit()
-	case err := <-errChan:
-		if err != nil {
-			log.Printf("Error: %v", err)
+	}()
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case sig := <-sigChan:
+			logger.Warnf("Received signal: %v", sig)
+			orch.Stop()
+			p.Quit()
 		}
+	}()
+
+	// Run TUI in the main goroutine
+	_, tuiErr := p.Run()
+
+	// TUI exited — cancel orchestrator and wait for graceful shutdown
+	orch.Stop()
+
+	var orchErr error
+	select {
+	case orchErr = <-orchDone:
+	case <-time.After(tuiShutdownTimeout):
+		orchErr = errors.New("timed out waiting for orchestrator shutdown")
 	}
+
+	if tuiErr != nil || orchErr != nil {
+		return errors.Join(tuiErr, orchErr)
+	}
+	return nil
+}
+
+// runDryRun runs a single orchestrator poll cycle and exits.
+func runDryRun(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal, logger *cliLogger) error {
+	eventDone := make(chan struct{})
+	go func() {
+		defer close(eventDone)
+		for event := range orch.Events {
+			logger.Infof("%s", formatEvent(event))
+		}
+	}()
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case sig := <-sigChan:
+			logger.Warnf("Received signal: %v", sig)
+			orch.Stop()
+		}
+	}()
+
+	err := orch.RunOnce()
+	<-eventDone
+	return err
 }
 
 // runHeadless runs the orchestrator without TUI, logging to stdout.
-func runHeadless(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal) {
+func runHeadless(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal, logger *cliLogger) error {
 	// Start event log goroutine
+	eventDone := make(chan struct{})
 	go func() {
+		defer close(eventDone)
 		for event := range orch.Events {
-			timestamp := event.Timestamp.Format("15:04:05")
-			if event.IssueID != "" {
-				fmt.Printf("[%s] %s %s\n", timestamp, event.IssueID, event.Type)
-			} else {
-				fmt.Printf("[%s] %s\n", timestamp, event.Type)
-			}
+			logger.Infof("%s", formatEvent(event))
 		}
 	}()
 
 	// Handle signals
 	go func() {
-		<-sigChan
-		log.Println("Shutting down...")
-		orch.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case sig := <-sigChan:
+			logger.Warnf("Shutting down due to signal: %v", sig)
+			orch.Stop()
+		}
 	}()
 
 	// Run orchestrator
-	if err := orch.Run(); err != nil {
-		log.Printf("Orchestrator error: %v", err)
+	err := orch.Run()
+	<-eventDone
+	return err
+}
+
+func formatEvent(event types.OrchestratorEvent) string {
+	timestamp := event.Timestamp
+	if timestamp.IsZero() {
+		timestamp = time.Now().UTC()
 	}
+
+	stamp := timestamp.Format("15:04:05")
+	if event.IssueID != "" {
+		return fmt.Sprintf("[%s] %s %s", stamp, event.IssueID, event.Type)
+	}
+	return fmt.Sprintf("[%s] %s", stamp, event.Type)
 }

@@ -25,6 +25,7 @@ type MockAgentRunner struct {
 	// Tracking
 	StartCalls     int
 	StopCalls      int
+	CloseCalls     int
 	WorkspacePaths []string
 	Prompts        []string
 }
@@ -116,6 +117,9 @@ func (m *MockAgentRunner) Stop(proc *types.AgentProcess) error {
 
 // Close implements AgentRunner.Close
 func (m *MockAgentRunner) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.CloseCalls++
 	return nil
 }
 

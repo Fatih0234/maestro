@@ -1,6 +1,6 @@
 # Minimal Contrabass for OpenCode
 
-> A minimal orchestrator for OpenCode coding agent with local board tracker
+> A minimal orchestrator for OpenCode coding agents with local board tracker and persistent run diagnostics
 
 ## Scope
 
@@ -8,6 +8,7 @@ This is a stripped-down version of Contrabass that focuses on:
 - ✅ Single-agent orchestrator (no team system)
 - ✅ Local board tracker (file-based, no external service)
 - ✅ OpenCode agent runner
+- ✅ Persistent run diagnostics
 - ✅ Git worktree workspaces
 - ✅ WORKFLOW.md config parser
 - ✅ Charm TUI (Bubble Tea)
@@ -42,6 +43,8 @@ No external dependencies beyond OpenCode, Git, and Go.
 │   │   └── manager.go        # Git worktree management
 │   ├── agent/
 │   │   └── opencode.go       # OpenCode HTTP+SSE runner
+│   ├── diagnostics/
+│   │   └── recorder.go       # Persistent run records
 │   ├── orchestrator/
 │   │   ├── orchestrator.go   # Main loop, dispatch
 │   │   ├── events.go        # Event types
@@ -67,6 +70,9 @@ Parse `WORKFLOW.md` with YAML front matter:
 ---
 max_concurrency: 3
 poll_interval_ms: 2000
+max_retry_backoff_ms: 240000
+agent_timeout_ms: 900000
+stall_timeout_ms: 60000
 tracker:
   type: internal
   board_dir: .contrabass/board
@@ -95,6 +101,9 @@ workspace:
 |-------|------|---------|-------------|
 | `max_concurrency` | int | 3 | Max concurrent agents |
 | `poll_interval_ms` | int | 30000 | Poll interval in ms |
+| `max_retry_backoff_ms` | int | 240000 | Max retry backoff in ms |
+| `agent_timeout_ms` | int | 900000 | Agent timeout in ms |
+| `stall_timeout_ms` | int | 60000 | Stall detection timeout in ms |
 | `tracker.type` | string | internal | Tracker type |
 | `tracker.board_dir` | string | .contrabass/orchestrator/board | Local board path |
 | `tracker.issue_prefix` | string | CB | Issue ID prefix |
@@ -154,21 +163,51 @@ File-based issue storage:
 }
 ```
 
-**States:** `todo`, `in_progress`, `done`
+**States:** `todo`, `in_progress`, `retry_queued`, `in_review`, `done`
 
 **Operations:**
-- `FetchIssues()` → list all non-done issues
+- `FetchIssues()` → list all non-terminal issues (`todo`, `in_progress`, and ready `retry_queued`), excluding `in_review` and `done`
 - `ClaimIssue(id)` → mark as in_progress, set claimed_by
 - `ReleaseIssue(id)` → mark as todo, clear claimed_by
 - `UpdateIssueState(id, state)` → update state
 - `PostComment(id, body)` → append to comments file
 
-### 3. Workspace Manager
+### Runtime Records
 
-Git worktree-based workspaces:
+When the board lives under `.contrabass/projects/<project>/board/`, the recorder stores run diagnostics in the sibling `.contrabass/projects/<project>/runs/` directory.
+
+Typical contents:
 
 ```bash
-workspaces/
+.contrabass/projects/<project>/runs/
+├── _orchestrator/
+│   └── events.jsonl
+└── CB-1/
+    ├── issue.json
+    ├── summary.json
+    └── attempts/
+        └── 001/
+            ├── meta.json
+            ├── prompt.md
+            ├── events.jsonl
+            ├── stdout.log
+            ├── stderr.log
+            ├── preflight/
+            │   ├── git-status.txt
+            │   └── git-worktree-list.txt
+            └── postflight/
+                ├── git-status.txt
+                └── git-worktree-list.txt
+```
+
+These files are part of the source of truth for review and debugging.
+
+### 3. Workspace Manager
+
+Git worktree-based workspaces (default: a sibling `<repo>.worktrees/` directory outside the repo tree):
+
+```bash
+../<repo>.worktrees/
 ├── CB-1/          # Branch: opencode/CB-1
 │   └── (repo files)
 ├── CB-2/          # Branch: opencode/CB-2
@@ -177,8 +216,8 @@ workspaces/
 ```
 
 **Operations:**
-- `Create(issue)` → `git worktree add workspaces/CB-1 -b opencode/CB-1`
-- `Cleanup(issueID)` → `git worktree remove workspaces/CB-1`
+- `Create(issue)` → `git worktree add ../<repo>.worktrees/CB-1 -b opencode/CB-1`
+- `Cleanup(issueID)` → `git worktree remove ../<repo>.worktrees/CB-1` (human-driven after review; not automatic on runtime success)
 - `Exists(issueID)` → check if workspace exists
 
 ### 4. OpenCode Agent Runner
@@ -250,6 +289,7 @@ Main loop:
 - Skip if at max concurrency
 - Skip if issue already managed
 - Claim issue → Create workspace → Render prompt → Start agent
+- On success, move the issue to `in_review` and keep the worktree + run records intact for human review
 
 **DispatchBackoff:**
 - Check retry timestamps
@@ -327,7 +367,7 @@ type model struct {
 
 ### Phase 5: Polish
 11. **Error handling** — graceful shutdown, recovery
-12. **CLI flags** — config, no-tui, log-level
+12. **CLI flags** — config, no-tui, dry-run, log-level
 13. **Tests** — basic test coverage
 
 ## Key Types
@@ -339,6 +379,7 @@ const (
     Claimed
     Running
     RetryQueued
+    InReview
     Released
 )
 
@@ -415,7 +456,7 @@ type AgentProcess struct {
 # Run with custom log level
 ./contrabass --config WORKFLOW.md --log-level debug
 
-# Dry run (exit after first poll)
+# Dry run (exactly one poll cycle, then exit)
 ./contrabass --config WORKFLOW.md --dry-run
 ```
 

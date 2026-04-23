@@ -572,8 +572,8 @@ func (o *Orchestrator) handleAgentDone(issueID string, runErr error) {
     if runErr == nil {
         // Success
         o.State.Remove(issueID)
-        _ = o.Tracker.UpdateIssueState(issueID, types.StateReleased)  // or done
-        _ = o.Workspace.Cleanup(issueID)
+        _ = o.Tracker.UpdateIssueState(issueID, types.StateInReview) // runtime success hands off to human review
+        // workspace cleanup is human-driven after review/merge
         o.Backoff.Remove(issueID)
         
         o.emit(EventAgentFinished, issueID, AgentFinishedPayload{

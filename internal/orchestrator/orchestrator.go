@@ -35,10 +35,11 @@ type Orchestrator struct {
 	promptTmpl string
 
 	// Goroutine tracking for graceful shutdown
-	wg      sync.WaitGroup
-	mu      sync.Mutex                    // protects running map
-	running map[string]context.CancelFunc // issueID -> cancel func for that run's context
-	closed  bool
+	wg           sync.WaitGroup
+	mu           sync.Mutex                    // protects running map
+	running      map[string]context.CancelFunc // issueID -> cancel func for that run's context
+	closed       bool
+	shutdownOnce sync.Once
 }
 
 // New creates a new Orchestrator.
@@ -82,6 +83,10 @@ func (o *Orchestrator) Run() error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	if o.ctx.Err() != nil {
+		return o.shutdown()
+	}
+
 	// Run initial poll
 	o.poll()
 
@@ -95,8 +100,22 @@ func (o *Orchestrator) Run() error {
 	}
 }
 
+// RunOnce performs a single poll cycle and then shuts the orchestrator down.
+func (o *Orchestrator) RunOnce() error {
+	if o.ctx.Err() != nil {
+		return o.shutdown()
+	}
+
+	o.poll()
+	return o.shutdown()
+}
+
 // poll performs a single poll cycle.
 func (o *Orchestrator) poll() {
+	if o.isClosed() {
+		return
+	}
+
 	o.emit(EventPollStarted, "", struct{}{})
 	defer o.emit(EventPollCompleted, "", struct{}{})
 
@@ -113,6 +132,10 @@ func (o *Orchestrator) poll() {
 // reconcileRunning checks for stalls and timeouts in active runs.
 func (o *Orchestrator) reconcileRunning() {
 	for _, run := range o.State.GetAll() {
+		if o.isClosed() {
+			return
+		}
+
 		elapsed := time.Since(run.StartedAt)
 		lastEventAge := time.Since(run.LastEventAt)
 
@@ -229,11 +252,23 @@ func (o *Orchestrator) handleStall(run *RunState, lastEventAge time.Duration) {
 
 // dispatchBackoff retries ready backoff entries.
 func (o *Orchestrator) dispatchBackoff() {
+	if o.isClosed() {
+		return
+	}
+
 	for _, entry := range o.Backoff.Ready() {
+		if o.isClosed() {
+			return
+		}
+
 		// Skip if at capacity - re-add entry to backoff to preserve it
 		if o.Config.MaxConcurrency > 0 && o.State.Len() >= o.Config.MaxConcurrency {
 			// Re-add with same attempt to preserve retry position
 			o.Backoff.Enqueue(entry.IssueID, entry.Attempt, entry.Error)
+			return
+		}
+
+		if o.isClosed() {
 			return
 		}
 
@@ -259,6 +294,10 @@ func (o *Orchestrator) dispatchBackoff() {
 
 // dispatchReady claims and starts new issues.
 func (o *Orchestrator) dispatchReady() {
+	if o.isClosed() {
+		return
+	}
+
 	// Skip if at capacity
 	if o.Config.MaxConcurrency > 0 && o.State.Len() >= o.Config.MaxConcurrency {
 		return
@@ -271,6 +310,10 @@ func (o *Orchestrator) dispatchReady() {
 	}
 
 	for _, issue := range issues {
+		if o.isClosed() {
+			return
+		}
+
 		if issue.State == types.StateInReview || issue.State == types.StateReleased {
 			continue
 		}
@@ -288,6 +331,10 @@ func (o *Orchestrator) dispatchReady() {
 		// Skip if in backoff
 		if _, inBackoff := o.Backoff.Get(issue.ID); inBackoff {
 			continue
+		}
+
+		if o.isClosed() {
+			return
 		}
 
 		// Claim the issue
@@ -336,6 +383,12 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 		}
 	}
 
+	if o.isClosed() {
+		runCancel()
+		o.removeRunning(issueID)
+		return
+	}
+
 	// 1. Create workspace
 	wsPath, err := o.Workspace.Create(runCtx, issue)
 	if err != nil {
@@ -368,6 +421,12 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 	})
 
 	// 3. Start agent
+	if o.isClosed() {
+		runCancel()
+		o.removeRunning(issueID)
+		return
+	}
+
 	o.State.UpdatePhase(issueID, types.PhaseLaunchingAgentProcess)
 	proc, err := o.AgentRunner.Start(runCtx, issue, workspacePath, prompt)
 	if err != nil {
@@ -405,6 +464,13 @@ func (o *Orchestrator) removeRunning(issueID string) {
 	o.mu.Lock()
 	delete(o.running, issueID)
 	o.mu.Unlock()
+}
+
+// isClosed reports whether shutdown has been requested or completed.
+func (o *Orchestrator) isClosed() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.closed
 }
 
 // handleStartError handles errors during startRun.
@@ -630,49 +696,48 @@ func (o *Orchestrator) emit(eventType, issueID string, payload interface{}) {
 
 // shutdown gracefully shuts down the orchestrator.
 func (o *Orchestrator) shutdown() error {
-	o.mu.Lock()
-	if o.closed {
+	o.shutdownOnce.Do(func() {
+		o.mu.Lock()
+		o.closed = true
 		o.mu.Unlock()
-		return nil
-	}
-	o.closed = true
-	o.mu.Unlock()
 
-	// Cancel main context - signals all run contexts
-	o.cancel()
+		// Cancel main context - signals all run contexts
+		o.cancel()
 
-	// Wait for all monitorAgent goroutines to finish
-	done := make(chan struct{})
-	go func() {
-		o.wg.Wait()
-		close(done)
-	}()
+		// Wait for all monitorAgent goroutines to finish
+		done := make(chan struct{})
+		go func() {
+			o.wg.Wait()
+			close(done)
+		}()
 
-	// Give goroutines a moment to clean up
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		// Timeout waiting, force stop agents
-	}
-
-	// Stop all remaining agent processes
-	for _, run := range o.State.GetAll() {
-		if run.Process != nil {
-			_ = o.AgentRunner.Stop(run.Process)
+		// Give goroutines a moment to clean up
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			// Timeout waiting, force stop agents
 		}
-	}
 
-	// Close agent runner
-	_ = o.AgentRunner.Close()
+		// Stop all remaining agent processes
+		for _, run := range o.State.GetAll() {
+			if run.Process != nil && o.AgentRunner != nil {
+				_ = o.AgentRunner.Stop(run.Process)
+			}
+		}
 
-	// Close recorder after all agents have stopped.
-	if o.Recorder != nil {
-		_ = o.Recorder.Close()
-	}
+		// Close agent runner
+		if o.AgentRunner != nil {
+			_ = o.AgentRunner.Close()
+		}
 
-	// Close event channel
-	close(o.Events)
+		// Close recorder after all agents have stopped.
+		if o.Recorder != nil {
+			_ = o.Recorder.Close()
+		}
 
+		// Close event channel
+		close(o.Events)
+	})
 	return nil
 }
 

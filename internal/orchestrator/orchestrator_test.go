@@ -600,6 +600,10 @@ func TestOrchestrator_StopCancelsContext(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Error("Run() did not return after Stop()")
 	}
+
+	if got := runner.CloseCalls; got != 1 {
+		t.Errorf("CloseCalls = %d, want 1", got)
+	}
 }
 
 func TestOrchestrator_Shutdown(t *testing.T) {
@@ -615,6 +619,72 @@ func TestOrchestrator_Shutdown(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("shutdown() returned error: %v", err)
+	}
+	if got := runner.CloseCalls; got != 1 {
+		t.Errorf("CloseCalls = %d, want 1", got)
+	}
+}
+
+func TestOrchestrator_RunOnce_ShutsDownAfterOnePoll(t *testing.T) {
+	cfg := testConfig()
+	tracker := NewMockTracker(nil)
+	runner := NewMockAgentRunner()
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	eventsClosed := make(chan struct{})
+	go func() {
+		for range orch.Events {
+		}
+		close(eventsClosed)
+	}()
+
+	if err := orch.RunOnce(); err != nil {
+		t.Fatalf("RunOnce() returned error: %v", err)
+	}
+
+	if got := runner.CloseCalls; got != 1 {
+		t.Errorf("CloseCalls = %d, want 1", got)
+	}
+
+	select {
+	case <-eventsClosed:
+	case <-time.After(100 * time.Millisecond):
+		t.Error("events channel was not closed after RunOnce")
+	}
+}
+
+func TestOrchestrator_StopBeforeRunSkipsInitialPoll(t *testing.T) {
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
+	runner := NewMockAgentRunner()
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	orch.Stop()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- orch.Run()
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run() returned error: %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Run() did not return after pre-cancelled Stop()")
+	}
+
+	if got := tracker.ClaimCount("CB-1"); got != 0 {
+		t.Errorf("ClaimCount(CB-1) = %d, want 0", got)
+	}
+	if got := runner.StartCalls; got != 0 {
+		t.Errorf("StartCalls = %d, want 0", got)
+	}
+	if got := runner.CloseCalls; got != 1 {
+		t.Errorf("CloseCalls = %d, want 1", got)
 	}
 }
 
