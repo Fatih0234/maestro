@@ -4,6 +4,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -467,8 +468,35 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 		}
 
 		// Run stages sequentially.
+		var lastResult *pipeline.Result
 		for _, stage := range stages {
 			if runCtx.Err() != nil {
+				// Context cancelled between stages — treat as a failure so state is cleaned up.
+				err := runCtx.Err()
+				o.State.UpdatePhase(issueID, types.PhaseFailed)
+				o.State.Remove(issueID)
+
+				nextAttempt := attempt + 1
+				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, fmt.Sprintf("context cancelled before %s: %v", stage, err))
+				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
+
+				o.emit(EventStageFailed, issueID, StageFailedPayload{
+					IssueID:     issueID,
+					Stage:       stage,
+					FailureKind: types.StageFailureTimeout,
+					Error:       err.Error(),
+					Retryable:   true,
+				})
+				o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+					IssueID: issueID,
+					Success: false,
+					Error:   err.Error(),
+				})
+				o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
+					IssueID: issueID,
+					Attempt: nextAttempt,
+					RetryAt: entry.RetryAt,
+				})
 				return
 			}
 			if _, ok := o.State.Get(issueID); !ok {
@@ -507,10 +535,11 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
 				o.emit(EventStageFailed, issueID, StageFailedPayload{
-					IssueID:   issueID,
-					Stage:     stage,
-					Error:     err.Error(),
-					Retryable: true,
+					IssueID:     issueID,
+					Stage:       stage,
+					FailureKind: o.classifyStageFailure(err, stage),
+					Error:       err.Error(),
+					Retryable:   true,
 				})
 				o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
 					IssueID: issueID,
@@ -536,15 +565,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 					errMsg = result.Error.Error()
 				}
 
-				var failureKind types.StageFailureKind
-				switch stage {
-				case types.StagePlan:
-					failureKind = types.StageFailureModelFailure
-				case types.StageExecute:
-					failureKind = types.StageFailureToolError
-				case types.StageVerify:
-					failureKind = types.StageFailureVerification
-				}
+				failureKind := o.classifyStageFailure(result.Error, stage)
 
 				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, errMsg)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, result.Error)
@@ -575,14 +596,26 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				Stage:   stage,
 				Summary: fmt.Sprintf("%s stage completed", stage),
 			})
+			lastResult = result
 		}
 
 		// All stages passed — hand off to human review.
 		o.State.UpdatePhase(issueID, types.PhaseSucceeded)
 
+		handoffBranch := branchName
+		handoffWorkspace := workspacePath
+		if lastResult != nil {
+			if lastResult.Branch != "" {
+				handoffBranch = lastResult.Branch
+			}
+			if lastResult.WorkspacePath != "" {
+				handoffWorkspace = lastResult.WorkspacePath
+			}
+		}
+
 		if attemptRecorder, ok := diagnostics.AttemptFromContext(runCtx); ok {
 			_ = attemptRecorder.RecordReviewHandoff(
-				fmt.Sprintf("All stages completed for %s.\n\nWorkspace: %s\nBranch: %s", issueID, workspacePath, branchName),
+				fmt.Sprintf("All stages completed for %s.\n\nWorkspace: %s\nBranch: %s", issueID, handoffWorkspace, handoffBranch),
 				"",
 			)
 		}
@@ -620,8 +653,8 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 		})
 		o.emit(EventIssueReadyForReview, issueID, IssueReadyForReviewPayload{
 			IssueID:       issueID,
-			Branch:        branchName,
-			WorkspacePath: workspacePath,
+			Branch:        handoffBranch,
+			WorkspacePath: handoffWorkspace,
 		})
 	}()
 }
@@ -810,6 +843,33 @@ func (o *Orchestrator) captureCommit(ctx context.Context, dir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// classifyStageFailure maps a runtime error to a typed stage failure kind.
+func (o *Orchestrator) classifyStageFailure(err error, stage types.Stage) types.StageFailureKind {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return types.StageFailureTimeout
+	}
+	if err == nil {
+		return types.StageFailureToolError
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "workspace") {
+		return types.StageFailureWorkspaceError
+	}
+	if strings.Contains(msg, "session start") || strings.Contains(msg, "agent start") {
+		return types.StageFailureSessionStartError
+	}
+	switch stage {
+	case types.StagePlan:
+		return types.StageFailureModelFailure
+	case types.StageExecute:
+		return types.StageFailureToolError
+	case types.StageVerify:
+		return types.StageFailureVerification
+	default:
+		return types.StageFailureToolError
+	}
 }
 
 func captureGitOutput(ctx context.Context, dir string, args ...string) string {
