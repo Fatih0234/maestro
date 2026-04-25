@@ -11,9 +11,9 @@ Contrabass is a Go reimplementation of OpenAI's Symphony with a Charm TUI stack.
 Contrabass operates on **issues** (tasks to be done) rather than directly on agents. The orchestrator:
 1. Polls an issue tracker for unclaimed issues
 2. Claims an issue and creates a workspace (git worktree)
-3. Renders a prompt using issue data and the `WORKFLOW.md` template
-4. Launches an agent runner to execute the task
-5. Monitors progress, handles failures, retries with backoff
+3. Runs the **plan → execute → verify** pipeline, one stage at a time
+4. Each stage uses a stage-specific prompt and can use a different agent
+5. Monitors progress, handles failures, retries with backoff at the **stage level**
 6. Hands successful runtime completion off to human review by moving the issue to `in_review`
 7. Persists run diagnostics and reports to the UI
 
@@ -28,8 +28,9 @@ Contrabass operates on **issues** (tasks to be done) rather than directly on age
 ├─────────────────────────────────────────────────────────────────┤
 │  Orchestrator                                                   │
 │  ├── Poll tracker for issues                                    │
-│  ├── Claim and dispatch to agents                               │
-│  ├── Manage retry backoff (exponential + jitter)               │
+│  ├── Claim and dispatch to pipeline stages                      │
+│  ├── Plan → Execute → Verify sequence                           │
+│  ├── Manage retry backoff per stage (exponential + jitter)     │
 │  ├── Detect stalls and timeouts                                 │
 │  └── Emit events to TUI                                         │
 ├──────────────────┬──────────────────┬──────────────────────────┤
@@ -37,11 +38,37 @@ Contrabass operates on **issues** (tasks to be done) rather than directly on age
 │  └── Local Board │  └── OpenCode    │  sibling worktree dir     │
 │                  │                  │  outside the repo tree    │
 ├──────────────────┴──────────────────┴──────────────────────────┤
+│  Pipeline Runner                                                │
+│  ├── Plan stage (read-only analysis)                            │
+│  ├── Execute stage (write-capable editing)                      │
+│  └── Verify stage (reviewer-style validation)                   │
+├─────────────────────────────────────────────────────────────────┤
 │  Diagnostics + UI                                               │
 │  ├── Run records (`.contrabass/projects/<project>/runs/`)       │
+│  │   ├── stages/plan/manifest.json + result.json                │
+│  │   ├── stages/execute/manifest.json + diff.patch              │
+│  │   ├── stages/verify/manifest.json + result.json              │
+│  │   └── review/handoff.md + decision.json                      │
 │  └── Charm TUI (Bubble Tea)                                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+## Pipeline Stages
+
+The orchestrator-owned pipeline is defined in `docs/specs/orchestrator-owned-pipeline/`.
+
+```
+todo -> in_progress -> plan -> execute -> verify -> in_review -> done
+```
+
+| Stage | Purpose | Artifacts Written |
+|-------|---------|-------------------|
+| **plan** | Analyze the issue and produce a concrete implementation plan | `stages/plan/prompt.md`, `response.md`, `manifest.json`, `result.json` |
+| **execute** | Apply the plan as code changes in the workspace | `stages/execute/prompt.md`, `response.md`, `diff.patch`, `manifest.json`, `result.json` |
+| **verify** | Confirm the change satisfies the issue and plan | `stages/verify/prompt.md`, `response.md`, `manifest.json`, `result.json` |
+| **human review** | Human inspects evidence and makes a decision | `review/handoff.md`, `decision.json` |
+
+If any stage fails, the orchestrator retries **that stage** (not the whole pipeline) after a backoff delay.
 
 ## Key Components
 
@@ -56,13 +83,14 @@ poll_interval_ms: 2000
 max_retry_backoff_ms: 240000
 agent_timeout_ms: 900000
 stall_timeout_ms: 60000
-tracker:
-  type: internal
-agent:
-  type: opencode
 opencode:
   binary_path: opencode serve
   port: 9090
+  agent: build
+  agents:
+    plan: plan
+    execute: build
+    verify: review
 workspace:
   base_dir: .
   branch_prefix: opencode/
@@ -74,6 +102,8 @@ Description: {{ issue.description }}
 ```
 
 Template bindings: `{{ issue.id }}`, `{{ issue.title }}`, `{{ issue.description }}`, `{{ issue.labels }}`
+
+Per-stage agent selection: `opencode.agents` maps stage names to agent names. If a stage is not mapped, the top-level `opencode.agent` is used.
 
 ### 2. Trackers (`internal/tracker/`)
 
@@ -103,7 +133,11 @@ Persistent run records live beside the board directory:
 - `_orchestrator/events.jsonl` — orchestrator event log
 - `<issue-id>/issue.json` — issue snapshot
 - `<issue-id>/summary.json` — issue-level run summary
-- `<issue-id>/attempts/<NNN>/...` — attempt-level prompt, event, stdout/stderr, and git snapshots
+- `<issue-id>/attempts/<NNN>/meta.json` — attempt metadata
+- `<issue-id>/attempts/<NNN>/stages/<stage>/manifest.json` — stage control file
+- `<issue-id>/attempts/<NNN>/stages/<stage>/result.json` — stage outcome
+- `<issue-id>/attempts/<NNN>/review/handoff.md` — human-readable review package
+- `<issue-id>/attempts/<NNN>/review/decision.json` — explicit review decision
 
 These records are the source of truth for review, debugging, and post-run inspection.
 
@@ -125,26 +159,36 @@ Current runtime uses the **OpenCode** runner:
 - submits prompts at `POST /session/{id}/prompt_async`
 - streams events via SSE at `GET /event`
 - aborts via `POST /session/{id}/abort`
+- agent selection is driven by `types.StageContext` carried in the context
 
-### 6. Orchestrator (`internal/orchestrator/`)
+### 6. Pipeline Runner (`internal/pipeline/`)
+
+Owns the per-issue stage lifecycle:
+- `Run(ctx, issue, attempt, stage, emit)` executes one stage end-to-end
+- Creates/reuses workspace (idempotent across stages)
+- Builds stage-specific prompts (planning mode, execution mode, verification mode)
+- Starts the agent and monitors events until completion
+- Writes stage artifacts via the diagnostics recorder
+- Classifies failures into typed `StageFailureKind`
+
+### 7. Orchestrator (`internal/orchestrator/`)
 
 Main event loop that:
 - polls the tracker at configurable intervals
 - claims unclaimed issues
-- creates workspaces and renders prompts
-- starts the agent runner
+- runs plan → execute → verify sequentially via `pipeline.Runner`
 - watches for completion, stalls, and timeouts
-- enqueues retries with exponential backoff
+- enqueues retries with exponential backoff at the **failed stage**
 - marks successful runtime completion as `in_review`
 - emits events to the TUI
 
-### 7. TUI Layer (`internal/tui/`)
+### 8. TUI Layer (`internal/tui/`)
 
 Bubble Tea UI that shows:
-- running sessions
-- event log
-- backoff queue
-- review handoff state
+- running sessions with current **stage** and attempt number
+- event log with stage transitions
+- backoff queue with ETA, failed stage, and failure reason
+- review-ready queue with wait time and completed stages
 
 ## Runtime Flow
 
@@ -157,11 +201,11 @@ Bubble Tea UI that shows:
    - poll tracker for issues
    - claim an issue
    - create a git worktree workspace
-   - render the prompt from the template
-   - start the agent process
-   - stream events until completion
-   - on success: move the issue to `in_review` and keep the workspace + run records
-   - on failure: enqueue a backoff retry
+   - **plan stage**: render planning prompt, run agent, write plan artifacts
+   - **execute stage**: render execution prompt, run agent, write execute artifacts + diff
+   - **verify stage**: render verification prompt, run agent, write verify artifacts
+   - on all stages passing: move issue to `in_review`, write review handoff
+   - on any stage failure: enqueue backoff for that stage, preserve attempt artifacts
    - emit events to the TUI
 7. On signal: graceful, idempotent shutdown
 
@@ -201,15 +245,17 @@ contrabass/
 ├── internal/
 │   ├── agent/               # Agent runners
 │   ├── config/              # Config parsing
-│   ├── diagnostics/         # Run records
-│   ├── orchestrator/        # Polling + dispatch
+│   ├── diagnostics/         # Run records + stage artifact recording
+│   ├── orchestrator/        # Polling + dispatch + stage loop
+│   ├── pipeline/            # Stage-aware runner (plan → execute → verify)
 │   ├── tracker/             # Local board
 │   ├── tui/                 # Terminal UI
-│   ├── types/               # Shared types
+│   ├── types/               # Shared types + pipeline types
 │   └── workspace/           # Git worktree management
 └── docs/
     ├── context/             # Implementation context
-    └── remote-project-orchestration.md
+    ├── specs/               # Design specs
+    └── references/contrabass/  # Reference implementation
 ```
 
 ## Key Dependencies
@@ -227,3 +273,4 @@ contrabass/
 - the orchestrator does **not** auto-merge, auto-clean up, or auto-close issues after runtime success
 - the sibling worktree dir keeps the remote project tree clean
 - persistent diagnostics make review and debugging reproducible
+- stage-scoped retries keep iteration tight: if verify fails, only verify is retried

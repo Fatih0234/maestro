@@ -1,16 +1,17 @@
 # Minimal Contrabass for OpenCode
 
-> A minimal orchestrator for OpenCode coding agents with local board tracker and persistent run diagnostics
+> A minimal orchestrator for OpenCode coding agents with local board tracker, persistent run diagnostics, and an orchestrator-owned pipeline.
 
 ## Scope
 
 This is a stripped-down version of Contrabass that focuses on:
 - ✅ Single-agent orchestrator (no team system)
+- ✅ Orchestrator-owned pipeline: **plan → execute → verify → human review**
 - ✅ Local board tracker (file-based, no external service)
 - ✅ OpenCode agent runner
-- ✅ Persistent run diagnostics
+- ✅ Persistent run diagnostics with stage artifacts
 - ✅ Git worktree workspaces
-- ✅ WORKFLOW.md config parser
+- ✅ WORKFLOW.md config parser with per-stage agent selection
 - ✅ Charm TUI (Bubble Tea)
 - ❌ ~~Multi-agent teams~~ (deferred)
 - ❌ ~~Linear/GitHub trackers~~ (deferred)
@@ -22,8 +23,9 @@ This is a stripped-down version of Contrabass that focuses on:
 **Keep it simple.** The goal is a working orchestrator that:
 1. Polls a local board for issues
 2. Creates a workspace for each issue
-3. Runs OpenCode to execute the task
+3. Runs the pipeline: plan → execute → verify
 4. Shows progress in a TUI
+5. Hands off to human review on success
 
 No external dependencies beyond OpenCode, Git, and Go.
 
@@ -42,21 +44,34 @@ No external dependencies beyond OpenCode, Git, and Go.
 │   ├── workspace/
 │   │   └── manager.go        # Git worktree management
 │   ├── agent/
-│   │   └── opencode.go       # OpenCode HTTP+SSE runner
+│   │   ├── opencode.go       # OpenCode HTTP+SSE runner
+│   │   ├── events.go         # Agent event constants + extraction helpers
+│   │   └── fakerunner.go     # Fake agent runner for tests
 │   ├── diagnostics/
-│   │   └── recorder.go       # Persistent run records
+│   │   ├── recorder.go       # Persistent run records
+│   │   └── stages.go         # StageRecorder + review handoff/decision
+│   ├── pipeline/
+│   │   └── runner.go         # Stage-aware runner (plan → execute → verify)
 │   ├── orchestrator/
-│   │   ├── orchestrator.go   # Main loop, dispatch
-│   │   ├── events.go        # Event types
-│   │   └── backoff.go       # Retry logic
-│   └── tui/
-│       ├── model.go          # Main TUI model
-│       ├── table.go          # Session table
-│       └── events.go         # Orchestrator event bridge
-├── context/                  # Documentation (this repo)
-│   ├── what-contrabass-is.md
-│   └── minimal-contrabass.md
-├── WORKSPACE.md              # Placeholder
+│   │   ├── orchestrator.go   # Main loop, dispatch, stage sequence
+│   │   ├── events.go         # Orchestrator event types + payloads
+│   │   ├── state.go          # In-memory run state tracking
+│   │   └── backoff.go        # Retry logic with stage-scoped resume
+│   ├── tui/
+│   │   ├── model.go          # Main TUI model + event application
+│   │   ├── table.go          # Session table rendering
+│   │   └── events.go         # Orchestrator event bridge
+│   ├── types/
+│   │   ├── types.go          # Core types (Issue, RunAttempt, AgentRunner, etc.)
+│   │   ├── pipeline.go       # Pipeline types (Stage, StageManifest, StageResult, etc.)
+│   │   └── context.go        # StageContext for context propagation
+│   └── util/
+│       └── strings.go        # String utilities
+├── docs/
+│   ├── context/              # Implementation guides (this file, what-contrabass-is.md)
+│   ├── specs/
+│   │   └── orchestrator-owned-pipeline/  # Authoritative pipeline spec
+│   └── references/contrabass/ # Reference implementation
 └── go.mod
 ```
 
@@ -75,14 +90,20 @@ agent_timeout_ms: 900000
 stall_timeout_ms: 60000
 tracker:
   type: internal
-  board_dir: .contrabass/board
+  board_dir: .contrabass/orchestrator/board
   issue_prefix: CB
 agent:
   type: opencode
 opencode:
   binary_path: opencode serve
   port: 9090
-  model: minimax-coding-plan/MiniMax-M2.7
+  profile: ""
+  agent: ""
+  agents:
+    plan: plan
+    execute: build
+    verify: review
+  config_dir: ""
 workspace:
   base_dir: .
   branch_prefix: opencode/
@@ -111,14 +132,14 @@ workspace:
 | `opencode.binary_path` | string | opencode serve | OpenCode binary |
 | `opencode.port` | int | 0 | Server port (0 = auto) |
 | `opencode.password` | string | "" | Server password |
-| `opencode.profile` | string | "" | Profile name (e.g., "ws", "omo-power") - maps to `~/.config/opencode/profiles/<profile>/opencode.jsonc` |
-| `opencode.agent` | string | "" | Default agent (e.g., "scribe", "build", "plan", "explore", "coder") |
+| `opencode.profile` | string | "" | Profile name |
+| `opencode.agent` | string | "" | Default agent name |
+| `opencode.agents` | map[string]string | {} | Per-stage agent mapping |
 | `opencode.config_dir` | string | "" | Optional custom .opencode directory |
-| `opencode.model` | string | "" | **Deprecated** - model is now set in profile config |
 | `workspace.base_dir` | string | . | Workspace root |
 | `workspace.branch_prefix` | string | opencode/ | Branch name prefix |
 
-> **Note on model:** The `opencode.model` field is deprecated. Model is now set via the profile config (`~/.config/opencode/profiles/<profile>/opencode.jsonc`). Use `opencode.profile` to select a profile containing your desired model.
+Per-stage agent selection: `opencode.agents` maps stage names (`plan`, `execute`, `verify`) to agent names. If a stage is not mapped, `opencode.agent` is used. This is resolved at runtime by `OpenCodeConfig.AgentForStage(stage)`.
 
 ### 2. Local Board Tracker
 
@@ -172,7 +193,9 @@ File-based issue storage:
 - `UpdateIssueState(id, state)` → update state
 - `PostComment(id, body)` → append to comments file
 
-### Runtime Records
+Issue states serialize as string labels (`todo`, `in_progress`, etc.) rather than integers for durability.
+
+### 3. Runtime Records
 
 When the board lives under `.contrabass/projects/<project>/board/`, the recorder stores run diagnostics in the sibling `.contrabass/projects/<project>/runs/` directory.
 
@@ -195,6 +218,36 @@ Typical contents:
             ├── preflight/
             │   ├── git-status.txt
             │   └── git-worktree-list.txt
+            ├── stages/
+            │   ├── plan/
+            │   │   ├── manifest.json
+            │   │   ├── prompt.md
+            │   │   ├── response.md
+            │   │   ├── result.json
+            │   │   ├── events.jsonl
+            │   │   ├── stdout.log
+            │   │   └── stderr.log
+            │   ├── execute/
+            │   │   ├── manifest.json
+            │   │   ├── prompt.md
+            │   │   ├── response.md
+            │   │   ├── result.json
+            │   │   ├── diff.patch
+            │   │   ├── events.jsonl
+            │   │   ├── stdout.log
+            │   │   └── stderr.log
+            │   └── verify/
+            │       ├── manifest.json
+            │       ├── prompt.md
+            │       ├── response.md
+            │       ├── result.json
+            │       ├── events.jsonl
+            │       ├── stdout.log
+            │       └── stderr.log
+            ├── review/
+            │   ├── handoff.md
+            │   ├── decision.json
+            │   └── notes.md
             └── postflight/
                 ├── git-status.txt
                 └── git-worktree-list.txt
@@ -202,7 +255,7 @@ Typical contents:
 
 These files are part of the source of truth for review and debugging.
 
-### 3. Workspace Manager
+### 4. Workspace Manager
 
 Git worktree-based workspaces (default: a sibling `<repo>.worktrees/` directory outside the repo tree):
 
@@ -220,7 +273,9 @@ Git worktree-based workspaces (default: a sibling `<repo>.worktrees/` directory 
 - `Cleanup(issueID)` → `git worktree remove ../<repo>.worktrees/CB-1` (human-driven after review; not automatic on runtime success)
 - `Exists(issueID)` → check if workspace exists
 
-### 4. OpenCode Agent Runner
+Workspace creation is idempotent — calling it multiple times for the same issue reuses the existing worktree. This is essential because the pipeline calls it before each stage.
+
+### 5. OpenCode Agent Runner
 
 Manages `opencode serve` process:
 
@@ -269,7 +324,31 @@ Manages `opencode serve` process:
 - `session.error` → session failed
 - `server.heartbeat` → ignore
 
-### 5. Orchestrator
+**Agent selection:** The runner reads `types.StageContext` from the context to determine which agent to use for the current stage. This is set by the orchestrator before each stage call.
+
+### 6. Pipeline Runner
+
+The pipeline runner (`internal/pipeline/runner.go`) owns the lifecycle of one stage:
+
+```go
+func (r *Runner) Run(ctx context.Context, issue types.Issue, attempt int, stage types.Stage, emit func(types.OrchestratorEvent)) (*Result, error)
+```
+
+For each stage it:
+1. Creates (or reuses) the workspace
+2. Builds a stage-specific prompt:
+   - **plan**: "You are in PLANNING mode... Do NOT make any code changes yet."
+   - **execute**: "You are in EXECUTION mode... Make the necessary code changes."
+   - **verify**: "You are in VERIFICATION mode... Provide a pass/fail assessment."
+3. Starts the agent with the stage context
+4. Monitors events until completion or context cancellation
+5. Captures postflight git state (status, worktree list, diff, commit)
+6. Writes stage artifacts via `diagnostics.StageRecorder`
+7. Returns a `Result` with success/error, workspace path, branch, diff, tokens
+
+The runner is called three times per issue (plan → execute → verify) by the orchestrator.
+
+### 7. Orchestrator
 
 Main loop:
 
@@ -288,56 +367,87 @@ Main loop:
 **DispatchReady:**
 - Skip if at max concurrency
 - Skip if issue already managed
-- Claim issue → Create workspace → Render prompt → Start agent
+- Claim issue → Create workspace → Start pipeline from **plan** stage
 - On success, move the issue to `in_review` and keep the worktree + run records intact for human review
 
 **DispatchBackoff:**
 - Check retry timestamps
-- Re-claim issue → Re-start agent
+- Re-claim issue → Resume from the **failed stage** (not from plan)
+- The `BackoffEntry` stores the stage to resume from
 
 **ReconcileRunning:**
 - Check for stale agents (no events recently)
 - Check for timeout (configurable)
-- On stall/timeout: Stop agent, enqueue backoff
+- On stall/timeout: Stop agent, enqueue backoff for the current stage
+
+**Stage sequence in `startRun()`:**
+```
+plan → execute → verify
+```
+
+If plan fails → retry plan.  
+If execute fails → retry execute.  
+If verify fails → retry verify.  
+If all pass → move to `in_review`.
 
 **Backoff strategy:**
 - Attempt 1: retry in 30s
 - Attempt 2: retry in 60s
 - Attempt 3: retry in 120s
 - ...exponential, max 4 minutes
+- Jitter: ±20% random variation
 
-### 6. Charm TUI
+### 8. Diagnostics Recorder
 
-Bubble Tea model:
+The recorder (`internal/diagnostics/recorder.go` + `stages.go`) persists every decision and artifact:
 
-**Model fields:**
-```go
-type model struct {
-    issues    []types.Issue
-    running   map[string]*runEntry
-    backoff   []types.BackoffEntry
-    stats     orchestrator.Stats
-    events    []string  // event log
-}
+- `EnsureIssue(issue)` creates/updates `issue.json` and `summary.json`
+- `BeginAttempt(...)` creates the attempt directory with preflight snapshots
+- `BeginStage(manifest, prompt)` creates the stage directory and writes `manifest.json` + `prompt.md`
+- `StageRecorder.Finish(result, response, diff)` writes `response.md`, `result.json`, updates `manifest.json`
+- `RecordReviewHandoff(body, notes)` writes `review/handoff.md` and `notes.md`
+- `RecordReviewDecision(decision)` writes `review/decision.json` and updates summary
+- `FinalizeAttempt(...)` writes postflight snapshots and finalizes `meta.json`
+
+All JSON writes are atomic (write to `.tmp` then rename).
+
+### 9. Charm TUI
+
+Bubble Tea model shows four sections:
+
+**Running agents table:**
+```
+Issue     Title                      Stage   PID        Tokens     Age   Attempt
+● CB-1    Fix login bug              Verify  12345     1.5K/2.3K   5m    #2
 ```
 
-**View:**
+**Review queue:**
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│ Contrabass                    Running: 2/3    Tokens: 1.2K/3.4K │
-├──────────────────────────────────────────────────────────────────┤
-│ Issue      Title                    Phase        Tokens  Last   │
-├──────────────────────────────────────────────────────────────────┤
-│ CB-1       Implement login         Streaming    1.1K    2s ago  │
-│ CB-2       Fix pagination         Initializing 234     5s ago   │
-├──────────────────────────────────────────────────────────────────┤
-│ Backoff Queue                                                [2] │
-│   CB-3  retry in 45s (attempt 2)                                  │
-├──────────────────────────────────────────────────────────────────┤
-│ [Events]                                                       │
-│ 14:32:01 CB-1 agent started (pid 12345, session sess-123)        │
-│ 14:32:05 CB-1 tokens updated (tokens_in=512)                    │
+┌ Ready for Human Review ────────────────────────────────────────[1]─┐
+│ CB-1  Fix login bug                                              │
+│   branch:  opencode/CB-1                                         │
+│   workspace: /path/to/workspace                                  │
+│   ready:   12m ago                                               │
+│   stages:  ✓ plan  ✓ execute  ✓ verify                           │
 └──────────────────────────────────────────────────────────────────┘
+```
+
+**Backoff queue:**
+```
+┌ Backoff Queue ─────────────────────────────────────────────────[1]─┐
+│ CB-1  retry in 2m15s  (attempt #2)                               │
+│   stage:   execute failed                                        │
+│   reason:  tool error: go build failed                           │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Event log:**
+```
+  [Events]
+  12:14:41 CB-1  [plan] started (attempt #1)
+  12:14:42 CB-1  [plan] agent started (pid: 12345)
+  12:15:10 CB-1  [plan] completed
+  12:15:11 CB-1  [execute] started
 ```
 
 **Key bindings:**
@@ -347,54 +457,86 @@ type model struct {
 
 ## Implementation Order
 
-### Phase 1: Core Foundation
+### Phase 1: Core contracts and artifact schema
 1. **go.mod setup** — dependencies only
-2. **Config parser** — parse WORKFLOW.md
-3. **Local tracker** — file-based issue management
-4. **Workspace manager** — git worktrees
+2. **Pipeline types** — `Stage`, `StageManifest`, `StageResult`, `StageFailureKind`, `ReviewDecision`
+3. **Diagnostics recorder** — `Recorder`, `AttemptRecorder`, `StageRecorder`
+4. **Issue state JSON serialization** — board-state strings
 
-### Phase 2: Agent Integration
-5. **OpenCode runner** — server lifecycle, HTTP, SSE
-6. **AgentProcess** — events channel, done channel
+### Phase 2: Stage-aware OpenCode runtime
+5. **Config parser** — add `opencode.agents` per-stage mapping
+6. **Pipeline runner** — `Run()` accepts `types.Stage`, builds stage prompts, records stage artifacts
+7. **Agent context** — `StageContext` via context for agent selection
 
-### Phase 3: Orchestrator
-7. **Main loop** — poll, dispatch, backoff
-8. **Event system** — emit, bridge to TUI
+### Phase 3: Orchestrator pipeline state machine
+8. **Main loop** — run plan → execute → verify sequentially
+9. **Stage-scoped retry** — `BackoffEntry` stores stage, resume from failed stage
+10. **Typed failure classification** — `classifyStageFailure()` maps errors to `StageFailureKind`
+11. **Review handoff** — preserve worktree, write `review/handoff.md`
 
-### Phase 4: TUI
-9. **Bubble Tea model** — state, update, view
-10. **Event bridge** — orchestrator → TUI
+### Phase 4: TUI visibility and review queue
+12. **Stage-aware rows** — show current stage, attempt number
+13. **Review queue** — show wait time, completed stages
+14. **Backoff queue** — show failed stage, failure kind, ETA
+15. **Event log** — human-readable stage transitions
 
-### Phase 5: Polish
-11. **Error handling** — graceful shutdown, recovery
-12. **CLI flags** — config, no-tui, dry-run, log-level
-13. **Tests** — basic test coverage
+### Phase 5: Tests and smoke harness
+16. **Fake runner coverage** — happy path, plan failure, execute failure, verify failure
+17. **Artifact assertions** — stage files exist, review handoff written
+18. **Retry regressions** — stall, timeout, stage-scoped retry
+19. **End-to-end smoke** — `in_review` and `done` paths
+
+### Phase 6: Docs and migration notes
+20. **Update implementation docs** — this file, what-contrabass-is.md, README.md
+21. **Migration notes** — what changed from single-stage to pipeline
+22. **Spec alignment** — ensure docs link to `docs/specs/orchestrator-owned-pipeline/`
 
 ## Key Types
 
 ```go
 // Issue states
 const (
-    Unclaimed    IssueState = iota
-    Claimed
-    Running
-    RetryQueued
-    InReview
-    Released
+    StateUnclaimed    IssueState = iota   // "todo"
+    StateClaimed                          // internal
+    StateRunning                          // "in_progress"
+    StateRetryQueued                      // "retry_queued"
+    StateInReview                         // "in_review"
+    StateReleased                         // "done"
 )
 
-// Run phases
+// Pipeline stages
+type Stage string
 const (
-    PreparingWorkspace RunPhase = iota
-    BuildingPrompt
-    LaunchingAgentProcess
-    InitializingSession
-    StreamingTurn
-    Finishing
-    Succeeded
-    Failed
-    TimedOut
-    Stalled
+    StagePlan        Stage = "plan"
+    StageExecute     Stage = "execute"
+    StageVerify      Stage = "verify"
+    StageHumanReview Stage = "human_review"
+)
+
+// Stage state
+type StageState string
+const (
+    StageStateRunning  StageState = "running"
+    StageStatePassed   StageState = "passed"
+    StageStateFailed   StageState = "failed"
+    StageStateBlocked  StageState = "blocked"
+    StageStateRetrying StageState = "retrying"
+    StageStateSkipped  StageState = "skipped"
+)
+
+// Stage failure kinds
+type StageFailureKind string
+const (
+    StageFailurePromptError       StageFailureKind = "prompt_error"
+    StageFailureSessionStartError StageFailureKind = "session_start_error"
+    StageFailureTimeout           StageFailureKind = "timeout"
+    StageFailureStall             StageFailureKind = "stall"
+    StageFailureModelFailure      StageFailureKind = "model_failure"
+    StageFailureWorkspaceError    StageFailureKind = "workspace_error"
+    StageFailureToolError         StageFailureKind = "tool_error"
+    StageFailureVerification      StageFailureKind = "verification_failed"
+    StageFailureHandoffError      StageFailureKind = "handoff_error"
+    StageFailureDecisionMissing   StageFailureKind = "decision_missing"
 )
 
 // Core types
@@ -406,27 +548,57 @@ type Issue struct {
     State       IssueState
     Labels      []string
     URL         string
+    RetryAfter  *time.Time
     CreatedAt   time.Time
     UpdatedAt   time.Time
 }
 
-type RunAttempt struct {
-    IssueID     string
-    Phase       RunPhase
-    Attempt     int
-    PID         int
-    StartTime   time.Time
-    TokensIn    int64
-    TokensOut   int64
-    SessionID   string
+type StageManifest struct {
+    Stage         Stage
+    Attempt       int
+    Status        StageState
+    Agent         string
+    SessionID     string
     WorkspacePath string
+    PromptPath    string
+    ResponsePath  string
+    ResultPath    string
+    EventsPath    string
+    StdoutPath    string
+    StderrPath    string
+    DiffPath      string
+    StartedAt     time.Time
+    FinishedAt    *time.Time
+    ErrorKind     StageFailureKind
+    Retryable     bool
+}
+
+type StageResult struct {
+    Stage       Stage
+    Status      StageState
+    Summary     string
+    FailureKind StageFailureKind
+    Retryable   bool
+    Evidence    []string
+    NextAction  string
+    StartedAt   time.Time
+    FinishedAt  time.Time
+}
+
+type ReviewDecision struct {
+    Decision      ReviewDecisionKind
+    ReviewedBy    string
+    ReviewedAt    time.Time
+    Notes         string
+    FollowUpState ReviewFollowUpState
 }
 
 type BackoffEntry struct {
-    IssueID  string
-    Attempt  int
-    RetryAt  time.Time
-    Error    string
+    IssueID string
+    Attempt int
+    Stage   Stage     // which stage to resume from
+    RetryAt time.Time
+    Error   string
 }
 
 // Agent interface
@@ -439,8 +611,17 @@ type AgentRunner interface {
 type AgentProcess struct {
     PID       int
     SessionID string
-    Events    chan AgentEvent  // streams events
-    Done      chan error       // closed on completion
+    Events    chan AgentEvent
+    Done      chan error
+    ServerURL string
+}
+
+// Orchestrator event
+type OrchestratorEvent struct {
+    Type      string
+    IssueID   string
+    Timestamp time.Time
+    Payload   any
 }
 ```
 

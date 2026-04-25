@@ -11,8 +11,8 @@ A minimal orchestrator for OpenCode coding agents. Poll a local board, create wo
 │  Contrabass-PI (this directory) │  ← Orchestrator lives here
 │  ├── Board                      │  ← Issue tracking here
 │  ├── Run records                │  ← Persistent diagnostics
-│  ├── Orchestrator               │  ← Manages everything
-│  └── Agent runner               │  ← Spawns agents
+│  ├── Orchestrator               │  ← Owns plan → execute → verify
+│  └── Agent runner               │  ← Spawns agents per stage
 └─────────────────────────────────┘
                 │ "work in /remote/project"
                 ▼
@@ -25,15 +25,42 @@ A minimal orchestrator for OpenCode coding agents. Poll a local board, create wo
 
 Configure `WORKFLOW.md` to point `workspace.base_dir` at any project you want to work on.
 
-## Lifecycle (human-review handoff)
+## Orchestrator-Owned Pipeline
+
+Contrabass-PI implements an **orchestrator-owned pipeline** where the orchestrator controls the lifecycle and the agent only provides the runtime for each stage.
+
+See the authoritative spec in [`docs/specs/orchestrator-owned-pipeline/`](./docs/specs/orchestrator-owned-pipeline/).
+
+### Pipeline stages
+
+```
+todo -> in_progress -> plan -> execute -> verify -> in_review -> done
+```
+
+| Stage | Purpose | Agent mode |
+|-------|---------|------------|
+| **plan** | Turn the issue into a concrete implementation plan | Read-only analysis |
+| **execute** | Apply the plan in the workspace | Write-capable editing |
+| **verify** | Confirm the change satisfies the issue | Reviewer-style validation |
+| **human review** | Human approves, rejects, or requests changes | Human gate |
+
+Each stage:
+- has a clear contract (inputs, outputs, success criteria)
+- writes durable artifacts to disk
+- can be retried independently without restarting the whole pipeline
+- uses a stage-specific agent when configured
+
+### Lifecycle (human-review handoff)
 
 Contrabass-PI separates **runtime completion** from **business completion**:
 
 1. issue is claimed and run in an isolated worktree
-2. agent finishes runtime execution
-3. orchestrator marks issue as `in_review`
-4. the worktree and run records are preserved for manual inspection
-5. human merges and later moves the issue to `done`
+2. **plan** stage produces an implementation plan
+3. **execute** stage applies the plan as code changes
+4. **verify** stage checks that the changes satisfy the issue
+5. orchestrator marks issue as `in_review`
+6. the worktree and run records are preserved for manual inspection
+7. human merges and later moves the issue to `done`
 
 By design, orchestrator success does **not** auto-merge, auto-cleanup, or auto-close the issue.
 
@@ -57,7 +84,8 @@ Inspired by [Contrabass](https://github.com/junhoyeo/contrabass), stripped to es
 | Run records | Persistent run diagnostics under `.contrabass/projects/<project>/runs/` |
 | Workspace manager | Git worktree per issue (outside repo tree by default) |
 | OpenCode runner | HTTP + SSE to communicate with the agent |
-| Orchestrator | Poll → claim → dispatch → retry → hand off for review |
+| Pipeline runner | Stage-aware runner: plan → execute → verify |
+| Orchestrator | Poll → claim → stage loop → retry → hand off for review |
 | Charm TUI | Bubble Tea interface |
 
 Everything else (teams, external trackers, web dashboard) is deferred.
@@ -81,12 +109,15 @@ internal/
   tracker/              # Local board (file-based)
   workspace/            # Git worktree manager
   agent/                # OpenCode runner (HTTP + SSE)
-  diagnostics/          # Persistent run recorder
-  orchestrator/         # Poll → claim → dispatch → retry
+  diagnostics/          # Persistent run recorder + stage artifacts
+  pipeline/             # Stage-aware runner (plan → execute → verify)
+  orchestrator/         # Poll → claim → stage loop → retry
   tui/                  # Charm Bubble Tea UI
-  types/                # Shared types
+  types/                # Shared types + pipeline types
+  util/                 # String utilities
 docs/
-  context/              # Our implementation docs
+  context/              # Implementation docs
+  specs/                # Design specs (orchestrator-owned-pipeline)
   references/contrabass/ # Contrabass (reference only)
 ```
 
@@ -111,6 +142,19 @@ git commit -m "Config parser now reads YAML front matter"
 Git tracks decisions — use it to understand the codebase history.
 
 ---
+
+## Docs and Specs
+
+| Path | Purpose |
+|------|---------|
+| `docs/specs/orchestrator-owned-pipeline/` | Authoritative pipeline spec: stages, artifacts, events, lifecycle |
+| `docs/context/what-contrabass-is.md` | High-level architecture and concepts |
+| `docs/context/minimal-contrabass.md` | Implementation guide synced to the Go code |
+| `docs/context/migration-from-single-agent.md` | What changed when we moved from single-stage to pipeline |
+| `docs/remote-project-orchestration.md` | How to orchestrate remote projects |
+| `docs/references/contrabass/` | Full Contrabass source (reference only) |
+
+If you are starting a fresh session, read the spec first (`docs/specs/orchestrator-owned-pipeline/README.md`), then `docs/context/minimal-contrabass.md`.
 
 ## Rules
 

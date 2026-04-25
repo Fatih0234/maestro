@@ -94,12 +94,17 @@ cd /Volumes/T7/projects/contrabass-pi
    ```
    /Volumes/T7/projects/contrabass-snake.worktrees/CB-1
    ```
-4. **Spawns agent** in that worktree directory
+4. **Runs the pipeline** in the worktree:
+   - **plan** stage: agent analyzes the issue and produces an implementation plan
+   - **execute** stage: agent applies the plan as code changes
+   - **verify** stage: agent confirms the changes satisfy the issue
 5. **Agent works** on the remote project (sees its files, commits to its git)
 6. On success, orchestrator moves the issue to **`in_review`**
-7. Run diagnostics are written under **`.contrabass/projects/<project>/runs/`**
+7. Run diagnostics are written under **`.contrabass/projects/<project>/runs/`** (including stage artifacts)
 8. Worktree is **kept intact** for human inspection
 9. Human decides when to merge to main and when to mark the issue done
+
+> The orchestrator runs each stage as a separate agent session with a stage-specific prompt. If a stage fails, only that stage is retried — not the whole pipeline.
 
 > **Important:** orchestrator does not auto-merge, auto-cleanup, or auto-close issues after runtime success.
 
