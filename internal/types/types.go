@@ -111,6 +111,7 @@ type RunAttempt struct {
 type BackoffEntry struct {
 	IssueID string    // Which issue to retry
 	Attempt int       // Which attempt number this retry represents
+	Stage   Stage     // Which stage to resume from
 	RetryAt time.Time // When to retry (calculated from backoff strategy)
 	Error   string    // What went wrong last time
 }

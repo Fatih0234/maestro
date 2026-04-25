@@ -368,7 +368,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 			}
 			m.agents[event.IssueID] = AgentRow{
 				IssueID:   issueID,
-				Stage:     types.StageExecute,
+				Stage:     payload.Stage,
 				Status:    "running",
 				PID:       payload.PID,
 				SessionID: payload.SessionID,
@@ -385,6 +385,35 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 				row.TokensIn = payload.TokensIn
 				row.TokensOut = payload.TokensOut
 				row.LastEvent = "tokens updated"
+				m.agents[event.IssueID] = row
+			}
+		}
+
+	case orchestrator.EventStageStarted:
+		if payload, ok := event.Payload.(orchestrator.StageStartedPayload); ok {
+			if row, exists := m.agents[event.IssueID]; exists {
+				row.Stage = payload.Stage
+				row.Status = "running"
+				row.LastEvent = string(payload.Stage) + " started"
+				m.agents[event.IssueID] = row
+			}
+		}
+
+	case orchestrator.EventStageCompleted:
+		if payload, ok := event.Payload.(orchestrator.StageCompletedPayload); ok {
+			if row, exists := m.agents[event.IssueID]; exists {
+				row.Stage = payload.Stage
+				row.LastEvent = string(payload.Stage) + " completed"
+				m.agents[event.IssueID] = row
+			}
+		}
+
+	case orchestrator.EventStageFailed:
+		if payload, ok := event.Payload.(orchestrator.StageFailedPayload); ok {
+			if row, exists := m.agents[event.IssueID]; exists {
+				row.Stage = payload.Stage
+				row.Status = "failed"
+				row.LastEvent = string(payload.Stage) + " failed"
 				m.agents[event.IssueID] = row
 			}
 		}

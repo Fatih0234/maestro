@@ -36,7 +36,7 @@ func TestStateManager_Add(t *testing.T) {
 	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
 
-	s.Add("CB-1", issue, 1, proc)
+	s.Add("CB-1", issue, 1, types.StageExecute, proc)
 
 	run, ok := s.Get("CB-1")
 	if !ok {
@@ -58,7 +58,7 @@ func TestStateManager_UpdatePhase(t *testing.T) {
 
 	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
-	s.Add("CB-1", issue, 1, proc)
+	s.Add("CB-1", issue, 1, types.StageExecute, proc)
 
 	s.UpdatePhase("CB-1", types.PhaseStreamingTurn)
 
@@ -73,7 +73,7 @@ func TestStateManager_UpdateTokens(t *testing.T) {
 
 	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
-	s.Add("CB-1", issue, 1, proc)
+	s.Add("CB-1", issue, 1, types.StageExecute, proc)
 
 	s.UpdateTokens("CB-1", 500, 1000)
 
@@ -91,7 +91,7 @@ func TestStateManager_UpdateLastEvent(t *testing.T) {
 
 	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
-	s.Add("CB-1", issue, 1, proc)
+	s.Add("CB-1", issue, 1, types.StageExecute, proc)
 
 	time.Sleep(10 * time.Millisecond)
 	s.UpdateLastEvent("CB-1")
@@ -107,7 +107,7 @@ func TestStateManager_SetError(t *testing.T) {
 
 	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
-	s.Add("CB-1", issue, 1, proc)
+	s.Add("CB-1", issue, 1, types.StageExecute, proc)
 
 	s.SetError("CB-1", "test error")
 
@@ -122,7 +122,7 @@ func TestStateManager_Remove(t *testing.T) {
 
 	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
-	s.Add("CB-1", issue, 1, proc)
+	s.Add("CB-1", issue, 1, types.StageExecute, proc)
 
 	s.Remove("CB-1")
 
@@ -139,14 +139,14 @@ func TestStateManager_Len(t *testing.T) {
 	}
 
 	issue1 := makeTestIssue("CB-1", "Test Issue CB-1")
-	s.Add("CB-1", issue1, 1, makeTestProcess("sess-1"))
+	s.Add("CB-1", issue1, 1, types.StageExecute, makeTestProcess("sess-1"))
 
 	if s.Len() != 1 {
 		t.Errorf("Len() = %d, want 1", s.Len())
 	}
 
 	issue2 := makeTestIssue("CB-2", "Test Issue CB-2")
-	s.Add("CB-2", issue2, 1, makeTestProcess("sess-2"))
+	s.Add("CB-2", issue2, 1, types.StageExecute, makeTestProcess("sess-2"))
 
 	if s.Len() != 2 {
 		t.Errorf("Len() = %d, want 2", s.Len())
@@ -163,10 +163,10 @@ func TestStateManager_GetAll(t *testing.T) {
 	s := NewStateManager()
 
 	issue1 := makeTestIssue("CB-1", "Test Issue CB-1")
-	s.Add("CB-1", issue1, 1, makeTestProcess("sess-1"))
+	s.Add("CB-1", issue1, 1, types.StageExecute, makeTestProcess("sess-1"))
 
 	issue2 := makeTestIssue("CB-2", "Test Issue CB-2")
-	s.Add("CB-2", issue2, 1, makeTestProcess("sess-2"))
+	s.Add("CB-2", issue2, 1, types.StageExecute, makeTestProcess("sess-2"))
 
 	all := s.GetAll()
 	if len(all) != 2 {
@@ -179,12 +179,12 @@ func TestStateManager_GetByPhase(t *testing.T) {
 
 	issue1 := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc1 := makeTestProcess("sess-1")
-	s.Add("CB-1", issue1, 1, proc1)
+	s.Add("CB-1", issue1, 1, types.StageExecute, proc1)
 	s.UpdatePhase("CB-1", types.PhaseStreamingTurn)
 
 	issue2 := makeTestIssue("CB-2", "Test Issue CB-2")
 	proc2 := makeTestProcess("sess-2")
-	s.Add("CB-2", issue2, 1, proc2)
+	s.Add("CB-2", issue2, 1, types.StageExecute, proc2)
 	s.UpdatePhase("CB-2", types.PhaseInitializingSession)
 
 	running := s.GetByPhase(types.PhaseStreamingTurn)
@@ -206,7 +206,7 @@ func TestStateManager_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			issue := makeTestIssue("CB-"+string(rune('0'+i)), "Test")
 			proc := &types.AgentProcess{PID: i, SessionID: "sess"}
-			s.Add("CB-"+string(rune('0'+i)), issue, 1, proc)
+			s.Add("CB-"+string(rune('0'+i)), issue, 1, types.StageExecute, proc)
 		}(i)
 	}
 	wg.Wait()

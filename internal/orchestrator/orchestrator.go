@@ -178,7 +178,7 @@ func (o *Orchestrator) handleTimeout(run *RunState, elapsed time.Duration) {
 
 	// Enqueue backoff
 	attempt := run.Attempt + 1
-	entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("timeout after %v", elapsed))
+	entry := o.Backoff.Enqueue(issueID, attempt, run.Stage, fmt.Sprintf("timeout after %v", elapsed))
 
 	o.finalizeAttempt(issueID, run.Attempt, "timed_out", &entry.RetryAt, fmt.Errorf("timeout after %v", elapsed))
 
@@ -217,7 +217,7 @@ func (o *Orchestrator) handleStall(run *RunState, lastEventAge time.Duration) {
 
 	// Enqueue backoff
 	attempt := run.Attempt + 1
-	entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("stall: no event for %v", lastEventAge))
+	entry := o.Backoff.Enqueue(issueID, attempt, run.Stage, fmt.Sprintf("stall: no event for %v", lastEventAge))
 
 	o.finalizeAttempt(issueID, run.Attempt, "stalled", &entry.RetryAt, fmt.Errorf("stall: no event for %v", lastEventAge))
 
@@ -270,8 +270,12 @@ func (o *Orchestrator) dispatchBackoff() {
 			_ = o.Recorder.EnsureIssue(issue)
 		}
 
-		// Start the run (reuse workspace if exists)
-		o.startRun(issue, entry.Attempt)
+		// Start the run (reuse workspace if exists), resuming from the failed stage.
+		startStage := entry.Stage
+		if startStage == "" {
+			startStage = types.StagePlan
+		}
+		o.startRun(issue, entry.Attempt, startStage)
 	}
 }
 
@@ -340,13 +344,18 @@ func (o *Orchestrator) dispatchReady() {
 		// Emit claimed
 		o.emit(EventIssueClaimed, issue.ID, IssueClaimedPayload{Issue: claimed})
 
-		// Start the run
-		o.startRun(claimed, 1)
+		// Start the run from the plan stage
+		o.startRun(claimed, 1, types.StagePlan)
 	}
 }
 
-// startRun starts a run for an issue with the given attempt number.
-func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
+// startRun starts a run for an issue with the given attempt number,
+// beginning from startStage (plan, execute, or verify).
+func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types.Stage) {
+	if startStage == "" || !startStage.Valid() {
+		startStage = types.StagePlan
+	}
+
 	// Create a cancellable context for this run
 	runCtx, runCancel := context.WithCancel(o.ctx)
 	issueID := issue.ID
@@ -373,15 +382,8 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 		}
 	}
 
-	// Attach stage context so the agent runner can select the right agent/profile.
-	stageAgent := ""
-	if o.Config.OpenCode != nil {
-		stageAgent = o.Config.OpenCode.AgentForStage(types.StageExecute.String())
-	}
-	runCtx = types.WithStage(runCtx, types.StageExecute, stageAgent)
-
 	// Add to active state
-	o.State.Add(issueID, issue, attempt, nil)
+	o.State.Add(issueID, issue, attempt, startStage, nil)
 
 	// Spawn goroutine to run the pipeline
 	o.wg.Add(1)
@@ -396,6 +398,24 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 			AgentRunner: o.AgentRunner,
 		}
 
+		// Determine the ordered stage list starting from startStage.
+		allStages := []types.Stage{types.StagePlan, types.StageExecute, types.StageVerify}
+		var stages []types.Stage
+		found := false
+		for _, s := range allStages {
+			if s == startStage {
+				found = true
+			}
+			if found {
+				stages = append(stages, s)
+			}
+		}
+		if !found {
+			stages = allStages
+		}
+
+		var totalTokensIn, totalTokensOut int64
+
 		// Intercept runner events to update orchestrator state and emit to the TUI.
 		wrappedEmit := func(event types.OrchestratorEvent) {
 			if event.IssueID == issueID {
@@ -403,11 +423,13 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 				switch event.Type {
 				case pipeline.EventTokensUpdated:
 					if payload, ok := event.Payload.(map[string]int64); ok {
-						o.State.UpdateTokens(issueID, payload["tokens_in"], payload["tokens_out"])
+						totalTokensIn += payload["tokens_in"]
+						totalTokensOut += payload["tokens_out"]
+						o.State.UpdateTokens(issueID, totalTokensIn, totalTokensOut)
 						o.emit(EventTokensUpdated, issueID, TokensUpdatedPayload{
 							IssueID:   issueID,
-							TokensIn:  payload["tokens_in"],
-							TokensOut: payload["tokens_out"],
+							TokensIn:  totalTokensIn,
+							TokensOut: totalTokensOut,
 						})
 						return
 					}
@@ -426,8 +448,13 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 						if o.Recorder != nil {
 							_ = o.Recorder.UpdateAttemptLaunchInfo(issueID, attempt, pid, sessionID, "")
 						}
+						var currentStage types.Stage
+						if rs, ok := o.State.Get(issueID); ok {
+							currentStage = rs.Stage
+						}
 						o.emit(EventAgentStarted, issueID, AgentStartedPayload{
 							IssueID:   issueID,
+							Stage:     currentStage,
 							PID:       pid,
 							SessionID: sessionID,
 						})
@@ -439,45 +466,52 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 			o.emit(event.Type, event.IssueID, event.Payload)
 		}
 
-		result, err := runner.Run(runCtx, issue, attempt, types.StageExecute, wrappedEmit)
+		// Run stages sequentially.
+		for _, stage := range stages {
+			if runCtx.Err() != nil {
+				return
+			}
+			if _, ok := o.State.Get(issueID); !ok {
+				return
+			}
 
-		// If state was already removed by timeout/stall handler, skip.
-		if _, ok := o.State.Get(issueID); !ok {
-			return
-		}
+			o.State.UpdateStage(issueID, stage)
 
-		if err != nil {
-			// Workspace or agent start failed.
-			o.State.UpdatePhase(issueID, types.PhaseFailed)
-			o.State.Remove(issueID)
+			stageAgent := ""
+			if o.Config.OpenCode != nil {
+				stageAgent = o.Config.OpenCode.AgentForStage(stage.String())
+			}
+			stageCtx := types.WithStage(runCtx, stage, stageAgent)
 
-			entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("pipeline run failed: %v", err))
-			o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
-
-			o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+			o.emit(EventStageStarted, issueID, StageStartedPayload{
 				IssueID: issueID,
-				Success: false,
-				Error:   err.Error(),
-			})
-			o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
-				IssueID: issueID,
+				Stage:   stage,
 				Attempt: attempt,
-				RetryAt: entry.RetryAt,
+				Agent:   stageAgent,
 			})
-			return
-		}
 
-		if result.Success {
-			// Runtime completion hands off to human review.
-			o.State.UpdatePhase(issueID, types.PhaseSucceeded)
-			if _, err := o.Tracker.UpdateIssueState(issueID, types.StateInReview); err != nil {
-				nextAttempt := result.Attempt + 1
+			result, err := runner.Run(stageCtx, issue, attempt, stage, wrappedEmit)
+
+			// If state was already removed by timeout/stall handler, skip.
+			if _, ok := o.State.Get(issueID); !ok {
+				return
+			}
+
+			if err != nil {
+				// Workspace or agent start failed.
 				o.State.UpdatePhase(issueID, types.PhaseFailed)
 				o.State.Remove(issueID)
 
-				entry := o.Backoff.Enqueue(issueID, nextAttempt, fmt.Sprintf("review handoff failed: %v", err))
-				o.finalizeAttempt(issueID, result.Attempt, "retry_queued", &entry.RetryAt, err)
+				nextAttempt := attempt + 1
+				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, fmt.Sprintf("stage %s failed: %v", stage, err))
+				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
+				o.emit(EventStageFailed, issueID, StageFailedPayload{
+					IssueID:   issueID,
+					Stage:     stage,
+					Error:     err.Error(),
+					Retryable: true,
+				})
 				o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
 					IssueID: issueID,
 					Success: false,
@@ -491,46 +525,104 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 				return
 			}
 
-			o.State.Remove(issueID)
-			o.Backoff.Remove(issueID)
+			if !result.Success {
+				// Stage runtime failure.
+				nextAttempt := attempt + 1
+				o.State.UpdatePhase(issueID, types.PhaseFailed)
+				o.State.Remove(issueID)
 
-			o.finalizeAttempt(issueID, result.Attempt, "awaiting_review", nil, nil)
+				var errMsg string
+				if result.Error != nil {
+					errMsg = result.Error.Error()
+				}
 
-			o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+				var failureKind types.StageFailureKind
+				switch stage {
+				case types.StagePlan:
+					failureKind = types.StageFailureModelFailure
+				case types.StageExecute:
+					failureKind = types.StageFailureToolError
+				case types.StageVerify:
+					failureKind = types.StageFailureVerification
+				}
+
+				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, errMsg)
+				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, result.Error)
+
+				o.emit(EventStageFailed, issueID, StageFailedPayload{
+					IssueID:     issueID,
+					Stage:       stage,
+					FailureKind: failureKind,
+					Error:       errMsg,
+					Retryable:   true,
+				})
+				o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+					IssueID: issueID,
+					Success: false,
+					Error:   errMsg,
+				})
+				o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
+					IssueID: issueID,
+					Attempt: nextAttempt,
+					RetryAt: entry.RetryAt,
+				})
+				return
+			}
+
+			// Stage succeeded.
+			o.emit(EventStageCompleted, issueID, StageCompletedPayload{
 				IssueID: issueID,
-				Success: true,
-				Error:   "",
+				Stage:   stage,
+				Summary: fmt.Sprintf("%s stage completed", stage),
 			})
-			o.emit(EventIssueReadyForReview, issueID, IssueReadyForReviewPayload{
-				IssueID:       issueID,
-				Branch:        result.Branch,
-				WorkspacePath: result.WorkspacePath,
-			})
-		} else {
-			// Failure - enqueue retry
-			nextAttempt := result.Attempt + 1
+		}
+
+		// All stages passed — hand off to human review.
+		o.State.UpdatePhase(issueID, types.PhaseSucceeded)
+
+		if attemptRecorder, ok := diagnostics.AttemptFromContext(runCtx); ok {
+			_ = attemptRecorder.RecordReviewHandoff(
+				fmt.Sprintf("All stages completed for %s.\n\nWorkspace: %s\nBranch: %s", issueID, workspacePath, branchName),
+				"",
+			)
+		}
+
+		if _, err := o.Tracker.UpdateIssueState(issueID, types.StateInReview); err != nil {
+			nextAttempt := attempt + 1
 			o.State.UpdatePhase(issueID, types.PhaseFailed)
 			o.State.Remove(issueID)
 
-			var errMsg string
-			if result.Error != nil {
-				errMsg = result.Error.Error()
-			}
-			entry := o.Backoff.Enqueue(issueID, nextAttempt, errMsg)
-
-			o.finalizeAttempt(issueID, result.Attempt, "retry_queued", &entry.RetryAt, result.Error)
+			entry := o.Backoff.Enqueue(issueID, nextAttempt, types.StagePlan, fmt.Sprintf("review handoff failed: %v", err))
+			o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
 			o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
 				IssueID: issueID,
 				Success: false,
-				Error:   errMsg,
+				Error:   err.Error(),
 			})
 			o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
 				IssueID: issueID,
 				Attempt: nextAttempt,
 				RetryAt: entry.RetryAt,
 			})
+			return
 		}
+
+		o.State.Remove(issueID)
+		o.Backoff.Remove(issueID)
+
+		o.finalizeAttempt(issueID, attempt, "awaiting_review", nil, nil)
+
+		o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+			IssueID: issueID,
+			Success: true,
+			Error:   "",
+		})
+		o.emit(EventIssueReadyForReview, issueID, IssueReadyForReviewPayload{
+			IssueID:       issueID,
+			Branch:        branchName,
+			WorkspacePath: workspacePath,
+		})
 	}()
 }
 
@@ -549,14 +641,18 @@ func (o *Orchestrator) isClosed() bool {
 }
 
 // handleStartError handles errors during startRun.
-func (o *Orchestrator) handleStartError(issue types.Issue, attempt int, err error, reason string) {
+func (o *Orchestrator) handleStartError(issue types.Issue, attempt int, startStage types.Stage, err error, reason string) {
 	issueID := issue.ID
 	o.State.SetError(issue.ID, err.Error())
 	o.State.UpdatePhase(issue.ID, types.PhaseFailed)
 	o.State.Remove(issue.ID)
 
+	if startStage == "" {
+		startStage = types.StagePlan
+	}
+
 	// Enqueue for retry
-	entry := o.Backoff.Enqueue(issue.ID, attempt, fmt.Sprintf("%s: %v", reason, err))
+	entry := o.Backoff.Enqueue(issue.ID, attempt, startStage, fmt.Sprintf("%s: %v", reason, err))
 
 	if o.Recorder != nil {
 		preflightStatus, preflightWorktreeList := o.captureGitState(o.workspaceBaseDir())
@@ -731,5 +827,3 @@ func captureGitOutput(ctx context.Context, dir string, args ...string) string {
 	}
 	return text
 }
-
-

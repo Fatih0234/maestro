@@ -11,15 +11,15 @@ import (
 
 // RunState tracks an active issue execution.
 type RunState struct {
-	Issue       types.Issue        // The issue being run
-	Attempt     int                // Current attempt number (1, 2, 3, ...)
+	Issue       types.Issue         // The issue being run
+	Attempt     int                 // Current attempt number (1, 2, 3, ...)
 	Process     *types.AgentProcess // The agent process
-	Phase       types.RunPhase     // Current phase
-	Stage       types.Stage        // Current pipeline stage
-	StartedAt   time.Time          // When the run started
+	Phase       types.RunPhase      // Current phase
+	Stage       types.Stage         // Current pipeline stage
+	StartedAt   time.Time           // When the run started
 	LastEventAt time.Time           // When the last event was received
-	TokensIn    int64              // Tokens sent to agent
-	TokensOut   int64              // Tokens received from agent
+	TokensIn    int64               // Tokens sent to agent
+	TokensOut   int64               // Tokens received from agent
 	Error       string              // Last error message (if any)
 }
 
@@ -37,7 +37,7 @@ func NewStateManager() *StateManager {
 }
 
 // Add creates a new run state.
-func (s *StateManager) Add(issueID string, issue types.Issue, attempt int, proc *types.AgentProcess) {
+func (s *StateManager) Add(issueID string, issue types.Issue, attempt int, stage types.Stage, proc *types.AgentProcess) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -47,7 +47,7 @@ func (s *StateManager) Add(issueID string, issue types.Issue, attempt int, proc 
 		Attempt:     attempt,
 		Process:     proc,
 		Phase:       types.PhaseLaunchingAgentProcess,
-		Stage:       types.StageExecute,
+		Stage:       stage,
 		StartedAt:   now,
 		LastEventAt: now,
 		TokensIn:    0,

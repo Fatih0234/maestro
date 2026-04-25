@@ -45,13 +45,14 @@ func (b *BackoffManager) CalculateDelay(attempt int) time.Duration {
 	return time.Duration(float64(baseDelay) + jitter)
 }
 
-// Enqueue adds a retry entry for an issue with the given attempt number.
-func (b *BackoffManager) Enqueue(issueID string, attempt int, errorMsg string) *types.BackoffEntry {
+// Enqueue adds a retry entry for an issue with the given attempt number and stage.
+func (b *BackoffManager) Enqueue(issueID string, attempt int, stage types.Stage, errorMsg string) *types.BackoffEntry {
 	delay := b.CalculateDelay(attempt)
 
 	entry := &types.BackoffEntry{
 		IssueID: issueID,
 		Attempt: attempt,
+		Stage:   stage,
 		RetryAt: time.Now().Add(delay),
 		Error:   errorMsg,
 	}

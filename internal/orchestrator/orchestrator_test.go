@@ -215,7 +215,7 @@ func TestBackoffManager_MaxDelayCap(t *testing.T) {
 func TestBackoffManager_EnqueueThenReady(t *testing.T) {
 	// Enqueue with very small max delay
 	b2 := NewBackoffManager(10 * time.Millisecond)
-	entry := b2.Enqueue("CB-1", 1, "test error")
+	entry := b2.Enqueue("CB-1", 1, types.StagePlan, "test error")
 
 	// Wait for delay to pass
 	time.Sleep(20 * time.Millisecond)
@@ -232,8 +232,8 @@ func TestBackoffManager_EnqueueThenReady(t *testing.T) {
 func TestBackoffManager_ReplacesExistingEntry(t *testing.T) {
 	b := NewBackoffManager(4 * time.Minute)
 
-	b.Enqueue("CB-1", 1, "error 1")
-	b.Enqueue("CB-1", 2, "error 2")
+	b.Enqueue("CB-1", 1, types.StagePlan, "error 1")
+	b.Enqueue("CB-1", 2, types.StagePlan, "error 2")
 
 	if b.Len() != 1 {
 		t.Errorf("Len() = %d, want 1 (replaced)", b.Len())
@@ -366,7 +366,7 @@ func TestOrchestrator_DispatchReady_SkipsRunningIssues(t *testing.T) {
 	orch := New(cfg, tracker, ws, runner)
 
 	// Manually add to state to simulate running
-	orch.State.Add("CB-1", issues[0], 1, &types.AgentProcess{})
+	orch.State.Add("CB-1", issues[0], 1, types.StageExecute, &types.AgentProcess{})
 
 	// Run poll
 	orch.poll()
@@ -387,7 +387,7 @@ func TestOrchestrator_DispatchReady_SkipsBackoffIssues(t *testing.T) {
 	orch := New(cfg, tracker, ws, runner)
 
 	// Manually add to backoff
-	orch.Backoff.Enqueue("CB-1", 1, "previous error")
+	orch.Backoff.Enqueue("CB-1", 1, types.StagePlan, "previous error")
 
 	// Run poll
 	orch.poll()
@@ -436,10 +436,14 @@ func TestOrchestrator_HandleAgentDone_Success(t *testing.T) {
 
 	orch.poll()
 
-	// Wait for agent to finish
-	time.Sleep(50 * time.Millisecond)
+	// Wait for agent to finish (3 stages × mock delay). Use a generous timeout
+	// because test scheduling can delay goroutines when the full suite runs.
+	time.Sleep(200 * time.Millisecond)
 
 	if !events.Has(EventIssueReadyForReview) {
+		for _, e := range events.Events {
+			t.Logf("collected event: %s issue=%s", e.Type, e.IssueID)
+		}
 		t.Error("Expected IssueReadyForReview event")
 	}
 	if events.Has(EventIssueCompleted) {
@@ -497,7 +501,7 @@ func TestOrchestrator_HandleAgentDone_HandoffStateUpdateFailureQueuesRetry(t *te
 	orch.poll()
 
 	// Wait for agent to finish and handoff attempt to fail.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	if events.Has(EventIssueReadyForReview) {
 		t.Error("did not expect ready_for_review event when tracker handoff fails")
@@ -526,7 +530,7 @@ func TestOrchestrator_DispatchBackoff_ConsumesReadyEntryOnce(t *testing.T) {
 	orch := New(cfg, tracker, ws, runner)
 	defer orch.Stop()
 
-	entry := orch.Backoff.Enqueue("CB-1", 1, "boom")
+	entry := orch.Backoff.Enqueue("CB-1", 1, types.StagePlan, "boom")
 	entry.RetryAt = time.Now().Add(-time.Second)
 
 	orch.dispatchBackoff()
@@ -566,6 +570,141 @@ func TestOrchestrator_HandleAgentDone_Failure(t *testing.T) {
 	}
 	if orch.Backoff.Len() != 1 {
 		t.Errorf("Backoff.Len() = %d, want 1", orch.Backoff.Len())
+	}
+}
+
+func TestOrchestrator_MultiStage_HappyPath(t *testing.T) {
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
+	runner := NewMockAgentRunner()
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	events := NewEventCollector(orch.Events)
+
+	orch.poll()
+	time.Sleep(200 * time.Millisecond)
+
+	if !events.Has(EventStageStarted) {
+		t.Error("Expected StageStarted event")
+	}
+	if !events.Has(EventStageCompleted) {
+		t.Error("Expected StageCompleted event")
+	}
+	if !events.Has(EventAgentFinished) {
+		t.Error("Expected AgentFinished event")
+	}
+	if !events.Has(EventIssueReadyForReview) {
+		t.Error("Expected IssueReadyForReview event")
+	}
+	if state := tracker.UpdateState["CB-1"]; state != types.StateInReview {
+		t.Errorf("issue state = %v, want %v", state, types.StateInReview)
+	}
+	// Should have started the agent 3 times (plan, execute, verify)
+	if got := runner.StartCalls; got != 3 {
+		t.Errorf("StartCalls = %d, want 3", got)
+	}
+}
+
+func TestOrchestrator_MultiStage_PlanFailureRetriesPlan(t *testing.T) {
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
+	runner := NewMockAgentRunner()
+	runner.PerStageDoneError = map[types.Stage]error{
+		types.StagePlan: errors.New("plan failed"),
+	}
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	events := NewEventCollector(orch.Events)
+
+	orch.poll()
+	time.Sleep(50 * time.Millisecond)
+
+	if !events.Has(EventStageFailed) {
+		t.Error("Expected StageFailed event")
+	}
+	if events.Has(EventIssueReadyForReview) {
+		t.Error("Did not expect IssueReadyForReview when plan fails")
+	}
+	if orch.Backoff.Len() != 1 {
+		t.Errorf("Backoff.Len() = %d, want 1", orch.Backoff.Len())
+	}
+	entry, _ := orch.Backoff.Get("CB-1")
+	if entry.Stage != types.StagePlan {
+		t.Errorf("retry stage = %v, want plan", entry.Stage)
+	}
+	// Only 1 start call (plan stage)
+	if got := runner.StartCalls; got != 1 {
+		t.Errorf("StartCalls = %d, want 1", got)
+	}
+}
+
+func TestOrchestrator_MultiStage_ExecuteFailureRetriesExecute(t *testing.T) {
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
+	runner := NewMockAgentRunner()
+	runner.PerStageDoneError = map[types.Stage]error{
+		types.StageExecute: errors.New("execute failed"),
+	}
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	events := NewEventCollector(orch.Events)
+
+	orch.poll()
+	time.Sleep(200 * time.Millisecond)
+
+	if !events.Has(EventStageFailed) {
+		t.Error("Expected StageFailed event")
+	}
+	if events.Has(EventIssueReadyForReview) {
+		t.Error("Did not expect IssueReadyForReview when execute fails")
+	}
+	if orch.Backoff.Len() != 1 {
+		t.Errorf("Backoff.Len() = %d, want 1", orch.Backoff.Len())
+	}
+	entry, _ := orch.Backoff.Get("CB-1")
+	if entry.Stage != types.StageExecute {
+		t.Errorf("retry stage = %v, want execute", entry.Stage)
+	}
+	// 2 start calls (plan succeeded, execute failed)
+	if got := runner.StartCalls; got != 2 {
+		t.Errorf("StartCalls = %d, want 2", got)
+	}
+}
+
+func TestOrchestrator_MultiStage_VerifyFailureBlocksReview(t *testing.T) {
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
+	runner := NewMockAgentRunner()
+	runner.PerStageDoneError = map[types.Stage]error{
+		types.StageVerify: errors.New("verify failed"),
+	}
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	events := NewEventCollector(orch.Events)
+
+	orch.poll()
+	time.Sleep(200 * time.Millisecond)
+
+	if !events.Has(EventStageFailed) {
+		t.Error("Expected StageFailed event")
+	}
+	if events.Has(EventIssueReadyForReview) {
+		t.Error("Did not expect IssueReadyForReview when verify fails")
+	}
+	if orch.Backoff.Len() != 1 {
+		t.Errorf("Backoff.Len() = %d, want 1", orch.Backoff.Len())
+	}
+	entry, _ := orch.Backoff.Get("CB-1")
+	if entry.Stage != types.StageVerify {
+		t.Errorf("retry stage = %v, want verify", entry.Stage)
+	}
+	// 3 start calls (plan + execute succeeded, verify failed)
+	if got := runner.StartCalls; got != 3 {
+		t.Errorf("StartCalls = %d, want 3", got)
 	}
 }
 

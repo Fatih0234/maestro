@@ -16,11 +16,12 @@ type MockAgentRunner struct {
 	stopped int
 
 	// Configurable behavior
-	ShouldFail   bool
-	FailError    error
-	Delay        time.Duration
-	EventsToSend []types.AgentEvent
-	DoneError    error // Error to send on Done channel (nil = success)
+	ShouldFail        bool
+	FailError         error
+	Delay             time.Duration
+	EventsToSend      []types.AgentEvent
+	DoneError         error // Error to send on Done channel (nil = success)
+	PerStageDoneError map[types.Stage]error
 
 	// Tracking
 	StartCalls     int
@@ -68,8 +69,13 @@ func (m *MockAgentRunner) Start(ctx context.Context, issue types.Issue, workspac
 	events := make(chan types.AgentEvent, 64)
 	done := make(chan error, 1)
 
-	// Capture error to send
+	// Capture error to send — allow per-stage overrides.
 	doneErr := m.DoneError
+	if stageCtx, ok := types.StageFromContext(ctx); ok {
+		if perStageErr, exists := m.PerStageDoneError[stageCtx.Stage]; exists {
+			doneErr = perStageErr
+		}
+	}
 
 	// Start goroutine to send events then close
 	go func() {

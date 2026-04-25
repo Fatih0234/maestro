@@ -2,7 +2,11 @@
 // tracker, workspace, and agent components.
 package orchestrator
 
-import "time"
+import (
+	"time"
+
+	"github.com/fatihkarahan/contrabass-pi/internal/types"
+)
 
 // OrchestratorEvent type constants for high-level orchestrator events.
 // These are separate from low-level AgentEvent constants in the agent package.
@@ -15,6 +19,9 @@ const (
 	EventTokensUpdated       = "tokens.updated"
 	EventAgentOutput         = "agent.output"
 	EventAgentFinished       = "agent.finished"
+	EventStageStarted        = "stage.started"
+	EventStageCompleted      = "stage.completed"
+	EventStageFailed         = "stage.failed"
 	EventIssueReadyForReview = "issue.ready_for_review"
 	EventIssueCompleted      = "issue.completed"
 	EventIssueRetrying       = "issue.retrying"
@@ -47,6 +54,7 @@ type PromptBuiltPayload struct {
 // AgentStartedPayload is the payload for EventAgentStarted.
 type AgentStartedPayload struct {
 	IssueID   string
+	Stage     types.Stage
 	PID       int
 	SessionID string
 }
@@ -69,6 +77,30 @@ type AgentFinishedPayload struct {
 	IssueID string
 	Success bool
 	Error   string
+}
+
+// StageStartedPayload is the payload for EventStageStarted.
+type StageStartedPayload struct {
+	IssueID string
+	Stage   types.Stage
+	Attempt int
+	Agent   string
+}
+
+// StageCompletedPayload is the payload for EventStageCompleted.
+type StageCompletedPayload struct {
+	IssueID string
+	Stage   types.Stage
+	Summary string
+}
+
+// StageFailedPayload is the payload for EventStageFailed.
+type StageFailedPayload struct {
+	IssueID     string
+	Stage       types.Stage
+	FailureKind types.StageFailureKind
+	Error       string
+	Retryable   bool
 }
 
 // IssueReadyForReviewPayload is the payload for EventIssueReadyForReview.
