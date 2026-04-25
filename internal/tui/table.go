@@ -22,6 +22,7 @@ type SessionRow struct {
 	TokensOut int64
 	SessionID string
 	LastEvent string
+	Attempt   int
 }
 
 // Table holds the session table state.
@@ -84,8 +85,8 @@ func (t Table) View() string {
 
 	// Build header
 	headerStyle := lipgloss.NewStyle().Bold(true).Faint(true)
-	header := headerStyle.Render(fmt.Sprintf("%-8s %-26s %-8s %-8s %-10s %s\n",
-		"Issue", "Title", "Phase", "PID", "Tokens", "Last"))
+	header := headerStyle.Render(fmt.Sprintf("%-8s %-24s %-7s %-8s %-10s %-6s %s\n",
+		"Issue", "Title", "Stage", "PID", "Tokens", "Age", "Att"))
 
 	// Build rows
 	var rowStrs []string
@@ -99,20 +100,25 @@ func (t Table) View() string {
 
 		// Truncate title
 		title := row.Title
-		if len(title) > 26 {
-			title = title[:23] + "..."
+		if len(title) > 24 {
+			title = title[:21] + "..."
 		}
-		title = fmt.Sprintf("%-26s", title)
+		title = fmt.Sprintf("%-24s", title)
 
-		stageStr := fmt.Sprintf("%-8s", compactStage(row.Stage))
+		stageStr := fmt.Sprintf("%-7s", compactStage(row.Stage))
 
 		glyph := statusGlyph(row.Status, t.spinner)
 		if t.focused && i == t.selected {
 			glyph = "▶"
 		}
 
-		rowStr := fmt.Sprintf("%s %-8s %-26s %-8s %8d %-10s %s\n",
-			glyph, row.IssueID, title, stageStr, row.PID, tokens, ageStr)
+		attemptStr := fmt.Sprintf("#%d", row.Attempt)
+		if row.Attempt <= 0 {
+			attemptStr = "#1"
+		}
+
+		rowStr := fmt.Sprintf("%s %-8s %-24s %-7s %8d %-10s %-6s %-3s\n",
+			glyph, row.IssueID, title, stageStr, row.PID, tokens, ageStr, attemptStr)
 
 		// Apply coloring
 		if t.focused && i == t.selected {

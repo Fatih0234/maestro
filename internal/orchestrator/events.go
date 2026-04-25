@@ -55,6 +55,7 @@ type PromptBuiltPayload struct {
 type AgentStartedPayload struct {
 	IssueID   string
 	Stage     types.Stage
+	Attempt   int
 	PID       int
 	SessionID string
 }
@@ -106,8 +107,10 @@ type StageFailedPayload struct {
 // IssueReadyForReviewPayload is the payload for EventIssueReadyForReview.
 type IssueReadyForReviewPayload struct {
 	IssueID       string
+	Title         string
 	Branch        string
 	WorkspacePath string
+	SummaryPath   string
 }
 
 // IssueCompletedPayload is the payload for EventIssueCompleted.
@@ -117,16 +120,22 @@ type IssueCompletedPayload struct {
 
 // IssueRetryingPayload is the payload for EventIssueRetrying.
 type IssueRetryingPayload struct {
-	IssueID string
-	Attempt int
-	RetryAt time.Time
+	IssueID     string
+	Attempt     int
+	Stage       types.Stage
+	RetryAt     time.Time
+	Error       string
+	FailureKind types.StageFailureKind
 }
 
 // BackoffQueuedPayload is the payload for EventBackoffQueued.
 type BackoffQueuedPayload struct {
-	IssueID string
-	Attempt int
-	RetryAt time.Time
+	IssueID     string
+	Attempt     int
+	Stage       types.Stage
+	RetryAt     time.Time
+	Error       string
+	FailureKind types.StageFailureKind
 }
 
 // StallDetectedPayload is the payload for EventStallDetected.

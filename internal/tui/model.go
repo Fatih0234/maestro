@@ -27,6 +27,9 @@ type Model struct {
 	backoffs map[string]BackoffRow
 	stats    HeaderStats
 
+	// Stage completion tracking (issueID -> set of completed stages)
+	stageProgress map[string]map[types.Stage]bool
+
 	// Session table
 	table Table
 
@@ -40,6 +43,9 @@ type Model struct {
 	eventLog   []EventLogEntry
 	maxLogSize int
 	scrollPos  int
+
+	// Selection state
+	reviewSelected int
 
 	// State
 	quitting bool
@@ -63,19 +69,24 @@ type AgentRow struct {
 
 // BackoffRow holds display data for one backoff entry.
 type BackoffRow struct {
-	IssueID string
-	Attempt int
-	RetryIn string
-	RetryAt time.Time
-	Error   string
+	IssueID     string
+	Attempt     int
+	Stage       types.Stage
+	RetryIn     string
+	RetryAt     time.Time
+	Error       string
+	FailureKind types.StageFailureKind
 }
 
 // ReviewRow holds display data for one review handoff entry.
 type ReviewRow struct {
-	IssueID       string
-	Branch        string
-	WorkspacePath string
-	ReadyAt       time.Time
+	IssueID         string
+	Title           string
+	Branch          string
+	WorkspacePath   string
+	ReadyAt         time.Time
+	StagesCompleted map[types.Stage]bool
+	FailureReason   string
 }
 
 // HeaderStats holds the header statistics.
@@ -92,17 +103,19 @@ type EventLogEntry struct {
 	Timestamp time.Time
 	IssueID   string
 	Message   string
+	Severity  string
 }
 
 // NewModel creates a new TUI model.
 func NewModel() Model {
 	return Model{
-		agents:     make(map[string]AgentRow),
-		reviews:    make(map[string]ReviewRow),
-		backoffs:   make(map[string]BackoffRow),
-		maxLogSize: 100,
-		eventLog:   make([]EventLogEntry, 0, 100),
-		table:      NewTable(),
+		agents:        make(map[string]AgentRow),
+		reviews:       make(map[string]ReviewRow),
+		backoffs:      make(map[string]BackoffRow),
+		stageProgress: make(map[string]map[types.Stage]bool),
+		maxLogSize:    100,
+		eventLog:      make([]EventLogEntry, 0, 100),
+		table:         NewTable(),
 	}
 }
 
@@ -230,6 +243,7 @@ func (m Model) renderTable() string {
 			TokensOut: row.TokensOut,
 			SessionID: row.SessionID,
 			LastEvent: row.LastEvent,
+			Attempt:   row.Attempt,
 		})
 	}
 
@@ -243,8 +257,13 @@ func (m Model) renderReviewQueue() string {
 		return ""
 	}
 
-	headerStyle := lipgloss.NewStyle().Faint(true)
-	header := headerStyle.Render(fmt.Sprintf("Ready for Human Review                             [%d]\n", len(m.reviews)))
+	boxStyle := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("42")).
+		Padding(0, 1)
+
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	header := headerStyle.Render(fmt.Sprintf("Ready for Human Review [%d]", len(m.reviews)))
 
 	rows := ""
 	for _, issueID := range m.sortedReviewKeys() {
@@ -257,11 +276,28 @@ func (m Model) renderReviewQueue() string {
 		if workspacePath == "" {
 			workspacePath = "(workspace path unavailable)"
 		}
-		rows += fmt.Sprintf("  %s  branch=%s\n", row.IssueID, branch)
-		rows += fmt.Sprintf("      %s\n", workspacePath)
+
+		waitTime := "just now"
+		if !row.ReadyAt.IsZero() {
+			waitTime = durationString(time.Since(row.ReadyAt)) + " ago"
+		}
+
+		stagesStr := m.formatStageCompletion(row.StagesCompleted)
+
+		rows += fmt.Sprintf("  %s  %s\n", issueID, row.Title)
+		rows += fmt.Sprintf("    branch:  %s\n", branch)
+		rows += fmt.Sprintf("    workspace: %s\n", workspacePath)
+		rows += fmt.Sprintf("    ready:   %s\n", waitTime)
+		if stagesStr != "" {
+			rows += fmt.Sprintf("    stages:  %s\n", stagesStr)
+		}
+		if row.FailureReason != "" {
+			rows += fmt.Sprintf("    reason:  %s\n", row.FailureReason)
+		}
 	}
 
-	return header + rows
+	content := header + "\n" + rows
+	return boxStyle.Render(content)
 }
 
 // renderBackoffQueue renders the backoff queue section.
@@ -270,8 +306,13 @@ func (m Model) renderBackoffQueue() string {
 		return ""
 	}
 
-	headerStyle := lipgloss.NewStyle().Faint(true)
-	header := headerStyle.Render(fmt.Sprintf("Backoff Queue                                      [%d]\n", len(m.backoffs)))
+	boxStyle := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("208")).
+		Padding(0, 1)
+
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("208"))
+	header := headerStyle.Render(fmt.Sprintf("Backoff Queue [%d]", len(m.backoffs)))
 
 	rows := ""
 	sortedKeys := m.sortedBackoffKeys()
@@ -281,19 +322,37 @@ func (m Model) renderBackoffQueue() string {
 		if retryIn == "" {
 			retryIn = "pending"
 		}
-		rows += fmt.Sprintf("  %s  retry in %s (attempt %d)\n", issueID, retryIn, row.Attempt)
+
+		stageStr := compactStage(row.Stage)
+		if stageStr == "" {
+			stageStr = "unknown"
+		}
+
+		failureStr := ""
+		if row.FailureKind != "" {
+			failureStr = string(row.FailureKind)
+		} else if row.Error != "" {
+			failureStr = truncate(row.Error, 40)
+		}
+
+		rows += fmt.Sprintf("  %s  retry in %s  (attempt #%d)\n", issueID, retryIn, row.Attempt)
+		rows += fmt.Sprintf("    stage:  %s failed\n", stageStr)
+		if failureStr != "" {
+			rows += fmt.Sprintf("    reason: %s\n", failureStr)
+		}
 	}
 
-	return header + rows
+	content := header + "\n" + rows
+	return boxStyle.Render(content)
 }
 
 // renderEventLog renders the scrolling event log.
 func (m Model) renderEventLog() string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Faint(true)
-	header := headerStyle.Render("  [Events]\n")
+	header := headerStyle.Render("  [Events]")
 
 	if len(m.eventLog) == 0 {
-		return header + lipgloss.NewStyle().Faint(true).Render("  No events yet")
+		return header + "\n" + lipgloss.NewStyle().Faint(true).Render("  No events yet")
 	}
 
 	// Calculate visible range
@@ -302,6 +361,9 @@ func (m Model) renderEventLog() string {
 	maxVisible := 15 // rough estimate
 	if end-start > maxVisible {
 		start = end - maxVisible
+		if start < 0 {
+			start = 0
+		}
 	}
 
 	entries := ""
@@ -312,11 +374,24 @@ func (m Model) renderEventLog() string {
 		if issueStr == "" {
 			issueStr = "-"
 		}
-		msg := fmt.Sprintf("  %s %s %s\n", timeStr, issueStr, entry.Message)
-		entries += msg
+
+		msgStyle := lipgloss.NewStyle()
+		switch entry.Severity {
+		case "error":
+			msgStyle = msgStyle.Foreground(lipgloss.Color("1"))
+		case "warn":
+			msgStyle = msgStyle.Foreground(lipgloss.Color("208"))
+		case "success":
+			msgStyle = msgStyle.Foreground(lipgloss.Color("42"))
+		default:
+			msgStyle = msgStyle.Faint(true)
+		}
+
+		msg := fmt.Sprintf("  %s %-8s %s", timeStr, issueStr, entry.Message)
+		entries += msgStyle.Render(msg) + "\n"
 	}
 
-	return header + entries
+	return header + "\n" + entries
 }
 
 // StartEventBridge starts the goroutine that bridges orchestrator events to the TUI.
@@ -356,8 +431,9 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		event.Timestamp = time.Now()
 	}
 
-	// Log the event
-	m.pushEvent(event.IssueID, fmt.Sprintf("%s", event.Type))
+	// Log the event with a human-readable message
+	msg, severity := formatEventMessage(event)
+	m.pushEvent(event.IssueID, msg, severity)
 
 	switch event.Type {
 	case orchestrator.EventAgentStarted:
@@ -369,6 +445,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 			m.agents[event.IssueID] = AgentRow{
 				IssueID:   issueID,
 				Stage:     payload.Stage,
+				Attempt:   payload.Attempt,
 				Status:    "running",
 				PID:       payload.PID,
 				SessionID: payload.SessionID,
@@ -384,7 +461,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 			if row, exists := m.agents[event.IssueID]; exists {
 				row.TokensIn = payload.TokensIn
 				row.TokensOut = payload.TokensOut
-				row.LastEvent = "tokens updated"
+				row.LastEvent = fmt.Sprintf("[%s] tokens %s/%s", compactStage(row.Stage), formatTokensShort(payload.TokensIn), formatTokensShort(payload.TokensOut))
 				m.agents[event.IssueID] = row
 			}
 		}
@@ -394,7 +471,8 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 			if row, exists := m.agents[event.IssueID]; exists {
 				row.Stage = payload.Stage
 				row.Status = "running"
-				row.LastEvent = string(payload.Stage) + " started"
+				row.Attempt = payload.Attempt
+				row.LastEvent = fmt.Sprintf("[%s] started", compactStage(payload.Stage))
 				m.agents[event.IssueID] = row
 			}
 		}
@@ -403,9 +481,10 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		if payload, ok := event.Payload.(orchestrator.StageCompletedPayload); ok {
 			if row, exists := m.agents[event.IssueID]; exists {
 				row.Stage = payload.Stage
-				row.LastEvent = string(payload.Stage) + " completed"
+				row.LastEvent = fmt.Sprintf("[%s] completed", compactStage(payload.Stage))
 				m.agents[event.IssueID] = row
 			}
+			m.recordStageCompletion(event.IssueID, payload.Stage)
 		}
 
 	case orchestrator.EventStageFailed:
@@ -413,7 +492,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 			if row, exists := m.agents[event.IssueID]; exists {
 				row.Stage = payload.Stage
 				row.Status = "failed"
-				row.LastEvent = string(payload.Stage) + " failed"
+				row.LastEvent = fmt.Sprintf("[%s] failed: %s", compactStage(payload.Stage), payload.FailureKind)
 				m.agents[event.IssueID] = row
 			}
 		}
@@ -437,9 +516,24 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 	case orchestrator.EventBackoffQueued:
 		if payload, ok := event.Payload.(orchestrator.BackoffQueuedPayload); ok {
 			m.backoffs[event.IssueID] = BackoffRow{
-				IssueID: event.IssueID,
-				Attempt: payload.Attempt,
-				RetryAt: payload.RetryAt,
+				IssueID:     event.IssueID,
+				Attempt:     payload.Attempt,
+				Stage:       payload.Stage,
+				RetryAt:     payload.RetryAt,
+				Error:       payload.Error,
+				FailureKind: payload.FailureKind,
+			}
+		}
+
+	case orchestrator.EventIssueRetrying:
+		if payload, ok := event.Payload.(orchestrator.IssueRetryingPayload); ok {
+			m.backoffs[event.IssueID] = BackoffRow{
+				IssueID:     event.IssueID,
+				Attempt:     payload.Attempt,
+				Stage:       payload.Stage,
+				RetryAt:     payload.RetryAt,
+				Error:       payload.Error,
+				FailureKind: payload.FailureKind,
 			}
 		}
 
@@ -450,15 +544,22 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 				issueID = event.IssueID
 			}
 			if issueID != "" {
+				stagesCompleted := m.stageProgress[issueID]
+				if stagesCompleted == nil {
+					stagesCompleted = make(map[types.Stage]bool)
+				}
 				m.reviews[issueID] = ReviewRow{
-					IssueID:       issueID,
-					Branch:        payload.Branch,
-					WorkspacePath: payload.WorkspacePath,
-					ReadyAt:       event.Timestamp,
+					IssueID:         issueID,
+					Title:           payload.Title,
+					Branch:          payload.Branch,
+					WorkspacePath:   payload.WorkspacePath,
+					ReadyAt:         event.Timestamp,
+					StagesCompleted: stagesCompleted,
 				}
 				m.reviewKeys = nil
 				delete(m.agents, issueID)
 				delete(m.backoffs, issueID)
+				delete(m.stageProgress, issueID)
 				m.agentSortDirty = true
 			}
 		}
@@ -468,6 +569,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		delete(m.reviews, event.IssueID)
 		m.reviewKeys = nil
 		delete(m.backoffs, event.IssueID)
+		delete(m.stageProgress, event.IssueID)
 		m.agentSortDirty = true
 
 	case orchestrator.EventTimeoutDetected:
@@ -517,15 +619,24 @@ func (m Model) refreshDerivedFields(now time.Time) Model {
 		m.backoffs[issueID] = row
 	}
 
+	// Update review wait times (indirectly via ReadyAt)
+	for issueID, row := range m.reviews {
+		if row.ReadyAt.IsZero() {
+			row.ReadyAt = now
+			m.reviews[issueID] = row
+		}
+	}
+
 	return m
 }
 
 // pushEvent adds an event to the log.
-func (m *Model) pushEvent(issueID, message string) {
+func (m *Model) pushEvent(issueID, message, severity string) {
 	entry := EventLogEntry{
 		Timestamp: time.Now(),
 		IssueID:   issueID,
 		Message:   message,
+		Severity:  severity,
 	}
 
 	m.eventLog = append(m.eventLog, entry)
@@ -539,6 +650,109 @@ func (m *Model) pushEvent(issueID, message string) {
 	m.scrollPos = len(m.eventLog) - 1
 	if m.scrollPos < 0 {
 		m.scrollPos = 0
+	}
+}
+
+// recordStageCompletion marks a stage as completed for an issue.
+func (m *Model) recordStageCompletion(issueID string, stage types.Stage) {
+	if m.stageProgress[issueID] == nil {
+		m.stageProgress[issueID] = make(map[types.Stage]bool)
+	}
+	m.stageProgress[issueID][stage] = true
+}
+
+// formatStageCompletion renders completed stages as a compact string.
+func (m Model) formatStageCompletion(stages map[types.Stage]bool) string {
+	if len(stages) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, s := range []types.Stage{types.StagePlan, types.StageExecute, types.StageVerify} {
+		if stages[s] {
+			parts = append(parts, "✓ "+s.String())
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += "  "
+		}
+		result += p
+	}
+	return " " + result
+}
+
+// formatEventMessage returns a human-readable message and severity for an orchestrator event.
+func formatEventMessage(event types.OrchestratorEvent) (string, string) {
+	switch event.Type {
+	case orchestrator.EventPollStarted:
+		return "poll started", "info"
+	case orchestrator.EventPollCompleted:
+		return "poll completed", "info"
+	case orchestrator.EventIssueClaimed:
+		return "issue claimed", "info"
+	case orchestrator.EventWorkspaceCreated:
+		return "workspace created", "info"
+	case orchestrator.EventPromptBuilt:
+		return "prompt built", "info"
+	case orchestrator.EventAgentStarted:
+		if p, ok := event.Payload.(orchestrator.AgentStartedPayload); ok {
+			return fmt.Sprintf("[%s] agent started (pid: %d)", compactStage(p.Stage), p.PID), "info"
+		}
+		return "agent started", "info"
+	case orchestrator.EventTokensUpdated:
+		if p, ok := event.Payload.(orchestrator.TokensUpdatedPayload); ok {
+			return fmt.Sprintf("tokens: %s/%s", formatTokensShort(p.TokensIn), formatTokensShort(p.TokensOut)), "info"
+		}
+		return "tokens updated", "info"
+	case orchestrator.EventAgentOutput:
+		return "agent output", "info"
+	case orchestrator.EventStageStarted:
+		if p, ok := event.Payload.(orchestrator.StageStartedPayload); ok {
+			return fmt.Sprintf("[%s] started (attempt #%d)", compactStage(p.Stage), p.Attempt), "info"
+		}
+		return "stage started", "info"
+	case orchestrator.EventStageCompleted:
+		if p, ok := event.Payload.(orchestrator.StageCompletedPayload); ok {
+			return fmt.Sprintf("[%s] completed", compactStage(p.Stage)), "success"
+		}
+		return "stage completed", "success"
+	case orchestrator.EventStageFailed:
+		if p, ok := event.Payload.(orchestrator.StageFailedPayload); ok {
+			return fmt.Sprintf("[%s] failed: %s", compactStage(p.Stage), p.FailureKind), "error"
+		}
+		return "stage failed", "error"
+	case orchestrator.EventAgentFinished:
+		if p, ok := event.Payload.(orchestrator.AgentFinishedPayload); ok {
+			if p.Success {
+				return "agent finished", "success"
+			}
+			return fmt.Sprintf("agent finished: %s", truncate(p.Error, 30)), "error"
+		}
+		return "agent finished", "info"
+	case orchestrator.EventIssueReadyForReview:
+		return "ready for review", "success"
+	case orchestrator.EventIssueCompleted:
+		return "issue completed", "success"
+	case orchestrator.EventBackoffQueued, orchestrator.EventIssueRetrying:
+		if p, ok := event.Payload.(orchestrator.BackoffQueuedPayload); ok {
+			return fmt.Sprintf("retry queued in %s (%s failed)", durationString(time.Until(p.RetryAt)), compactStage(p.Stage)), "warn"
+		}
+		if p, ok := event.Payload.(orchestrator.IssueRetryingPayload); ok {
+			return fmt.Sprintf("retry queued in %s (%s failed)", durationString(time.Until(p.RetryAt)), compactStage(p.Stage)), "warn"
+		}
+		return "retry queued", "warn"
+	case orchestrator.EventTimeoutDetected:
+		return "timeout detected", "error"
+	case orchestrator.EventStallDetected:
+		return "stall detected", "warn"
+	case orchestrator.EventMergeFailed:
+		return "merge failed", "error"
+	default:
+		return event.Type, "info"
 	}
 }
 

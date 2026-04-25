@@ -456,6 +456,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 						o.emit(EventAgentStarted, issueID, AgentStartedPayload{
 							IssueID:   issueID,
 							Stage:     currentStage,
+							Attempt:   attempt,
 							PID:       pid,
 							SessionID: sessionID,
 						})
@@ -492,10 +493,21 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 					Success: false,
 					Error:   err.Error(),
 				})
+				o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
+					IssueID:     issueID,
+					Attempt:     nextAttempt,
+					Stage:       stage,
+					RetryAt:     entry.RetryAt,
+					Error:       err.Error(),
+					FailureKind: types.StageFailureTimeout,
+				})
 				o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
-					IssueID: issueID,
-					Attempt: nextAttempt,
-					RetryAt: entry.RetryAt,
+					IssueID:     issueID,
+					Attempt:     nextAttempt,
+					Stage:       stage,
+					RetryAt:     entry.RetryAt,
+					Error:       err.Error(),
+					FailureKind: types.StageFailureTimeout,
 				})
 				return
 			}

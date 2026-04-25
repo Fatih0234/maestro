@@ -20,6 +20,9 @@ func TestNewModel(t *testing.T) {
 	if m.backoffs == nil {
 		t.Error("backoffs map should be initialized")
 	}
+	if m.stageProgress == nil {
+		t.Error("stageProgress map should be initialized")
+	}
 	if m.maxLogSize != 100 {
 		t.Errorf("maxLogSize = %d, want 100", m.maxLogSize)
 	}
@@ -215,6 +218,7 @@ func TestModelApplyOrchestratorEvent_IssueReadyForReview(t *testing.T) {
 		Timestamp: time.Now(),
 		Payload: orchestrator.IssueReadyForReviewPayload{
 			IssueID:       "CB-1",
+			Title:         "Fix login bug",
 			Branch:        "contrabass/CB-1",
 			WorkspacePath: "/tmp/ws/CB-1",
 		},
@@ -235,6 +239,9 @@ func TestModelApplyOrchestratorEvent_IssueReadyForReview(t *testing.T) {
 	if review.WorkspacePath != "/tmp/ws/CB-1" {
 		t.Fatalf("review workspace path = %q, want /tmp/ws/CB-1", review.WorkspacePath)
 	}
+	if review.Title != "Fix login bug" {
+		t.Fatalf("review title = %q, want Fix login bug", review.Title)
+	}
 }
 
 func TestModelApplyOrchestratorEvent_IssueCompletedRemovesReviewEntry(t *testing.T) {
@@ -252,6 +259,194 @@ func TestModelApplyOrchestratorEvent_IssueCompletedRemovesReviewEntry(t *testing
 
 	if _, ok := m.reviews["CB-1"]; ok {
 		t.Fatal("review entry should be removed when issue is completed")
+	}
+}
+
+func TestModelApplyOrchestratorEvent_BackoffQueuedWithStageAndFailureKind(t *testing.T) {
+	m := NewModel()
+
+	event := types.OrchestratorEvent{
+		Type:      orchestrator.EventBackoffQueued,
+		IssueID:   "CB-1",
+		Timestamp: time.Now(),
+		Payload: orchestrator.BackoffQueuedPayload{
+			IssueID:     "CB-1",
+			Attempt:     2,
+			Stage:       types.StageExecute,
+			RetryAt:     time.Now().Add(2 * time.Minute),
+			Error:       "go build failed",
+			FailureKind: types.StageFailureToolError,
+		},
+	}
+
+	m = m.applyOrchestratorEvent(event)
+
+	backoff, ok := m.backoffs["CB-1"]
+	if !ok {
+		t.Fatal("backoff entry not created")
+	}
+	if backoff.Attempt != 2 {
+		t.Errorf("attempt = %d, want 2", backoff.Attempt)
+	}
+	if backoff.Stage != types.StageExecute {
+		t.Errorf("stage = %q, want execute", backoff.Stage)
+	}
+	if backoff.FailureKind != types.StageFailureToolError {
+		t.Errorf("failureKind = %q, want tool_error", backoff.FailureKind)
+	}
+	if backoff.Error != "go build failed" {
+		t.Errorf("error = %q, want go build failed", backoff.Error)
+	}
+}
+
+func TestModelApplyOrchestratorEvent_IssueRetryingHandledLikeBackoff(t *testing.T) {
+	m := NewModel()
+
+	event := types.OrchestratorEvent{
+		Type:      orchestrator.EventIssueRetrying,
+		IssueID:   "CB-1",
+		Timestamp: time.Now(),
+		Payload: orchestrator.IssueRetryingPayload{
+			IssueID:     "CB-1",
+			Attempt:     3,
+			Stage:       types.StageVerify,
+			RetryAt:     time.Now().Add(5 * time.Minute),
+			Error:       "tests failed",
+			FailureKind: types.StageFailureVerification,
+		},
+	}
+
+	m = m.applyOrchestratorEvent(event)
+
+	backoff, ok := m.backoffs["CB-1"]
+	if !ok {
+		t.Fatal("backoff entry not created from issue.retrying")
+	}
+	if backoff.Attempt != 3 {
+		t.Errorf("attempt = %d, want 3", backoff.Attempt)
+	}
+	if backoff.Stage != types.StageVerify {
+		t.Errorf("stage = %q, want verify", backoff.Stage)
+	}
+}
+
+func TestModelApplyOrchestratorEvent_StageCompletedTracksProgress(t *testing.T) {
+	m := NewModel()
+	m.agents["CB-1"] = AgentRow{IssueID: "CB-1", Stage: types.StagePlan}
+
+	event := types.OrchestratorEvent{
+		Type:      orchestrator.EventStageCompleted,
+		IssueID:   "CB-1",
+		Timestamp: time.Now(),
+		Payload: orchestrator.StageCompletedPayload{
+			IssueID: "CB-1",
+			Stage:   types.StagePlan,
+			Summary: "plan done",
+		},
+	}
+
+	m = m.applyOrchestratorEvent(event)
+
+	if !m.stageProgress["CB-1"][types.StagePlan] {
+		t.Error("plan stage should be recorded as completed")
+	}
+}
+
+func TestModelApplyOrchestratorEvent_ReviewRowIncludesStageProgress(t *testing.T) {
+	m := NewModel()
+	m.agents["CB-1"] = AgentRow{IssueID: "CB-1"}
+	m.stageProgress["CB-1"] = map[types.Stage]bool{
+		types.StagePlan:    true,
+		types.StageExecute: true,
+		types.StageVerify:  true,
+	}
+
+	event := types.OrchestratorEvent{
+		Type:      orchestrator.EventIssueReadyForReview,
+		IssueID:   "CB-1",
+		Timestamp: time.Now(),
+		Payload: orchestrator.IssueReadyForReviewPayload{
+			IssueID:       "CB-1",
+			Title:         "Fix bug",
+			Branch:        "contrabass/CB-1",
+			WorkspacePath: "/tmp/ws/CB-1",
+		},
+	}
+
+	m = m.applyOrchestratorEvent(event)
+
+	review := m.reviews["CB-1"]
+	if len(review.StagesCompleted) != 3 {
+		t.Errorf("stages completed count = %d, want 3", len(review.StagesCompleted))
+	}
+	if !review.StagesCompleted[types.StagePlan] {
+		t.Error("plan should be in stages completed")
+	}
+	if m.stageProgress["CB-1"] != nil {
+		t.Error("stageProgress should be cleaned up after review handoff")
+	}
+}
+
+func TestFormatEventMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		event    types.OrchestratorEvent
+		wantMsg  string
+		wantSev  string
+	}{
+		{
+			name: "stage started",
+			event: types.OrchestratorEvent{
+				Type: orchestrator.EventStageStarted,
+				Payload: orchestrator.StageStartedPayload{
+					Stage:   types.StageExecute,
+					Attempt: 1,
+				},
+			},
+			wantMsg: "[Exec] started (attempt #1)",
+			wantSev: "info",
+		},
+		{
+			name: "stage completed",
+			event: types.OrchestratorEvent{
+				Type: orchestrator.EventStageCompleted,
+				Payload: orchestrator.StageCompletedPayload{
+					Stage: types.StageVerify,
+				},
+			},
+			wantMsg: "[Verify] completed",
+			wantSev: "success",
+		},
+		{
+			name: "stage failed",
+			event: types.OrchestratorEvent{
+				Type: orchestrator.EventStageFailed,
+				Payload: orchestrator.StageFailedPayload{
+					Stage:       types.StageExecute,
+					FailureKind: types.StageFailureToolError,
+				},
+			},
+			wantMsg: "[Exec] failed: tool_error",
+			wantSev: "error",
+		},
+		{
+			name:     "unknown event",
+			event:    types.OrchestratorEvent{Type: "custom.thing"},
+			wantMsg:  "custom.thing",
+			wantSev:  "info",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotMsg, gotSev := formatEventMessage(tt.event)
+			if gotMsg != tt.wantMsg {
+				t.Errorf("message = %q, want %q", gotMsg, tt.wantMsg)
+			}
+			if gotSev != tt.wantSev {
+				t.Errorf("severity = %q, want %q", gotSev, tt.wantSev)
+			}
+		})
 	}
 }
 
