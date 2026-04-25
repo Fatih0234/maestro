@@ -130,6 +130,84 @@ docs/
 
 ---
 
+## Configuration (`WORKFLOW.md`)
+
+`WORKFLOW.md` is a markdown file with YAML front matter. The YAML section configures the orchestrator; the markdown body is used as the prompt template.
+
+### Local board tracker (default)
+
+```yaml
+---
+max_concurrency: 3
+poll_interval_ms: 30000
+
+tracker:
+  type: internal
+  board_dir: .contrabass/orchestrator/board
+  issue_prefix: CB
+
+agent:
+  type: opencode
+
+opencode:
+  binary_path: opencode serve
+  profile: ws
+
+workspace:
+  base_dir: /path/to/project
+  branch_prefix: opencode/
+---
+
+# Prompt template
+
+Implement the following issue: {{ issue.title }}
+
+{{ issue.description }}
+```
+
+### GitHub Issues tracker
+
+```yaml
+---
+max_concurrency: 3
+poll_interval_ms: 30000
+
+tracker:
+  type: github
+  owner: my-org
+  repo: my-repo
+  token: ghp_xxxxxxxxxxxx
+  label_prefix: contrabass
+  assignee_bot: contrabass-bot
+
+agent:
+  type: opencode
+
+opencode:
+  binary_path: opencode serve
+  profile: ws
+
+workspace:
+  base_dir: /path/to/project
+  branch_prefix: opencode/
+---
+
+# Prompt template
+
+Implement the following issue: {{ issue.title }}
+
+{{ issue.description }}
+```
+
+When using the GitHub tracker:
+- Open issues with no assignee are picked up as new work
+- The bot claims issues by assigning itself
+- `in_review` adds a `contrabass:review` label and posts a handoff comment
+- `done` closes the issue
+- Retry-queued issues are skipped until their backoff time passes
+
+---
+
 ## Git Workflow
 
 Commit after every working piece. Brief explanations:

@@ -126,10 +126,23 @@ func run() error {
 	if boardDir == "" {
 		boardDir = ".contrabass/board"
 	}
-	tr := tracker.New(tracker.Config{
-		BoardDir:    boardDir,
-		IssuePrefix: cfg.Tracker.IssuePrefix,
-	})
+
+	var tr types.IssueTracker
+	switch cfg.Tracker.Type {
+	case "github":
+		tr = tracker.NewGitHub(
+			cfg.Tracker.Owner,
+			cfg.Tracker.Repo,
+			cfg.Tracker.Token,
+			cfg.Tracker.LabelPrefix,
+			cfg.Tracker.AssigneeBot,
+		)
+	default:
+		tr = tracker.New(tracker.Config{
+			BoardDir:    boardDir,
+			IssuePrefix: cfg.Tracker.IssuePrefix,
+		})
+	}
 
 	// Create workspace manager
 	wsMgr := workspace.New(workspace.Config{

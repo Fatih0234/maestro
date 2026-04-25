@@ -41,9 +41,14 @@ type Config struct {
 
 // TrackerConfig holds tracker-specific settings.
 type TrackerConfig struct {
-	Type        string `yaml:"type"`        // Tracker type (internal, github, linear)
+	Type        string `yaml:"type"`         // Tracker type (internal, github, linear)
 	BoardDir    string `yaml:"board_dir"`    // Local board directory
 	IssuePrefix string `yaml:"issue_prefix"` // Issue ID prefix (e.g., CB)
+	Owner       string `yaml:"owner"`        // GitHub owner (for github)
+	Repo        string `yaml:"repo"`         // GitHub repo (for github)
+	Token       string `yaml:"token"`        // GitHub token (for github)
+	LabelPrefix string `yaml:"label_prefix"` // GitHub label prefix (for github)
+	AssigneeBot string `yaml:"assignee_bot"` // GitHub bot assignee login (for github)
 }
 
 // AgentConfig holds agent-specific settings.
@@ -214,6 +219,18 @@ func (c *Config) Validate() error {
 
 	if c.Tracker.Type == "" {
 		return fmt.Errorf("tracker.type is required")
+	}
+
+	if c.Tracker.Type == "github" {
+		if strings.TrimSpace(c.Tracker.Owner) == "" {
+			return fmt.Errorf("tracker.owner is required when tracker.type is github")
+		}
+		if strings.TrimSpace(c.Tracker.Repo) == "" {
+			return fmt.Errorf("tracker.repo is required when tracker.type is github")
+		}
+		if strings.TrimSpace(c.Tracker.Token) == "" {
+			return fmt.Errorf("tracker.token is required when tracker.type is github")
+		}
 	}
 
 	if c.Agent.Type == "" {
