@@ -253,29 +253,32 @@ func TestGitHubTracker_UpdateIssueState_InReview(t *testing.T) {
 	mux := http.NewServeMux()
 	_, tr := withTestServer(t, mux)
 
-	mux.HandleFunc("/repos/test-owner/test-repo/issues/42/labels", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			t.Errorf("expected POST, got %s", r.Method)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]string{{"name": "contrabass:review"}})
-	})
-
-	mux.HandleFunc("/repos/test-owner/test-repo/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			t.Errorf("expected POST, got %s", r.Method)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": 1, "body": "contrabass: handoff for review"})
-	})
-
+	// filterLabels GETs the issue to read current labels
 	mux.HandleFunc("/repos/test-owner/test-repo/issues/42", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PATCH" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"number":     42,
+				"title":      "Test Issue",
+				"body":       "Description",
+				"state":      "open",
+				"labels":     []map[string]string{{"name": "contrabass:review"}},
+				"assignees":  []map[string]string{},
+				"html_url":   "https://github.com/test-owner/test-repo/issues/42",
+				"created_at": "2024-01-01T00:00:00Z",
+				"updated_at": "2024-01-01T00:00:00Z",
+			})
+			return
+		}
+		if r.Method != "GET" {
+			t.Errorf("expected GET or PATCH, got %s", r.Method)
+		}
 		issue := map[string]interface{}{
 			"number":     42,
 			"title":      "Test Issue",
 			"body":       "Description",
 			"state":      "open",
-			"labels":     []map[string]string{{"name": "contrabass:review"}},
+			"labels":     []map[string]string{{"name": "enhancement"}},
 			"assignees":  []map[string]string{},
 			"html_url":   "https://github.com/test-owner/test-repo/issues/42",
 			"created_at": "2024-01-01T00:00:00Z",
@@ -285,12 +288,95 @@ func TestGitHubTracker_UpdateIssueState_InReview(t *testing.T) {
 		json.NewEncoder(w).Encode(issue)
 	})
 
+	// hasComment GETs existing comments
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"id": 1, "body": "contrabass: handoff for review"})
+			return
+		}
+		if r.Method != "GET" {
+			t.Errorf("expected GET or POST, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]map[string]interface{}{})
+	})
+
 	issue, err := tr.UpdateIssueState("42", types.StateInReview)
 	if err != nil {
 		t.Fatalf("UpdateIssueState failed: %v", err)
 	}
 	if issue.State != types.StateInReview {
 		t.Errorf("expected state in_review, got %v", issue.State)
+	}
+}
+
+func TestGitHubTracker_UpdateIssueState_InReview_Idempotent(t *testing.T) {
+	mux := http.NewServeMux()
+	_, tr := withTestServer(t, mux)
+
+	commentPosted := false
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/42", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PATCH" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"number":     42,
+				"title":      "Test Issue",
+				"body":       "Description",
+				"state":      "open",
+				"labels":     []map[string]string{{"name": "contrabass:review"}},
+				"assignees":  []map[string]string{},
+				"html_url":   "https://github.com/test-owner/test-repo/issues/42",
+				"created_at": "2024-01-01T00:00:00Z",
+				"updated_at": "2024-01-01T00:00:00Z",
+			})
+			return
+		}
+		if r.Method != "GET" {
+			t.Errorf("expected GET or PATCH, got %s", r.Method)
+		}
+		issue := map[string]interface{}{
+			"number":     42,
+			"title":      "Test Issue",
+			"body":       "Description",
+			"state":      "open",
+			"labels":     []map[string]string{{"name": "contrabass:review"}, {"name": "contrabass:retry"}},
+			"assignees":  []map[string]string{},
+			"html_url":   "https://github.com/test-owner/test-repo/issues/42",
+			"created_at": "2024-01-01T00:00:00Z",
+			"updated_at": "2024-01-01T00:00:00Z",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(issue)
+	})
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			commentPosted = true
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"id": 2, "body": "contrabass: handoff for review"})
+			return
+		}
+		if r.Method != "GET" {
+			t.Errorf("expected GET or POST, got %s", r.Method)
+		}
+		// Simulate existing handoff comment
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]map[string]interface{}{
+			{"id": 1, "body": "contrabass: handoff for review"},
+		})
+	})
+
+	issue, err := tr.UpdateIssueState("42", types.StateInReview)
+	if err != nil {
+		t.Fatalf("UpdateIssueState failed: %v", err)
+	}
+	if issue.State != types.StateInReview {
+		t.Errorf("expected state in_review, got %v", issue.State)
+	}
+	if commentPosted {
+		t.Error("expected no new handoff comment when one already exists")
 	}
 }
 

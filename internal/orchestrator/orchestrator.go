@@ -484,6 +484,11 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 		var lastResult *pipeline.Result
 		for _, stage := range stages {
 			if runCtx.Err() != nil {
+				// If state was already removed by timeout/stall handler, skip.
+				if _, ok := o.State.Get(issueID); !ok {
+					return
+				}
+
 				// Context cancelled between stages — treat as a failure so state is cleaned up.
 				err := runCtx.Err()
 				o.State.UpdatePhase(issueID, types.PhaseFailed)

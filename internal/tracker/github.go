@@ -285,17 +285,28 @@ func (t *GitHubTracker) updateToRunning(num int) (types.Issue, error) {
 }
 
 func (t *GitHubTracker) updateToInReview(num int) (types.Issue, error) {
-	// Add review label
-	if err := t.addLabel(num, t.reviewLabel()); err != nil {
-		return types.Issue{}, err
+	// Set labels: remove retry, add review (idempotent — overwrites managed labels)
+	labels, err := t.filterLabels(num, []string{t.reviewLabel()})
+	if err != nil {
+		return types.Issue{}, fmt.Errorf("filtering labels for issue #%d: %w", num, err)
 	}
-
-	// Post handoff comment
-	if err := t.postComment(num, fmt.Sprintf("%s: handoff for review", t.labelPrefix)); err != nil {
-		return types.Issue{}, err
-	}
-
 	var updated githubIssue
+	if err := t.patch(fmt.Sprintf("/issues/%d", num), map[string]interface{}{"labels": labels}, &updated); err != nil {
+		return types.Issue{}, err
+	}
+
+	// Post handoff comment only if one doesn't already exist
+	handoffText := fmt.Sprintf("%s: handoff for review", t.labelPrefix)
+	exists, err := t.hasComment(num, handoffText)
+	if err != nil {
+		return types.Issue{}, fmt.Errorf("checking existing handoff comment: %w", err)
+	}
+	if !exists {
+		if err := t.postComment(num, handoffText); err != nil {
+			return types.Issue{}, err
+		}
+	}
+
 	if err := t.get(fmt.Sprintf("/issues/%d", num), &updated); err != nil {
 		return types.Issue{}, err
 	}
@@ -569,6 +580,20 @@ func (t *GitHubTracker) postComment(num int, text string) error {
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	return nil
+}
+
+// hasComment returns true if the issue already has a comment with the given text.
+func (t *GitHubTracker) hasComment(num int, text string) (bool, error) {
+	var comments []githubComment
+	if err := t.get(fmt.Sprintf("/issues/%d/comments", num), &comments); err != nil {
+		return false, err
+	}
+	for _, c := range comments {
+		if strings.TrimSpace(c.Body) == text {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (t *GitHubTracker) addLabel(num int, label string) error {
