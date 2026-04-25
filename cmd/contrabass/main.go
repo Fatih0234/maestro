@@ -7,6 +7,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -221,7 +223,10 @@ func (a *snapshotAdapter) Snapshot() web.Snapshot {
 
 	review := make([]web.ReviewSnapshot, 0)
 	if lt, ok := a.orch.Tracker.(*tracker.LocalTracker); ok {
-		if issues, err := lt.IssuesInReview(); err == nil {
+		issues, err := lt.IssuesInReview()
+		if err != nil {
+			log.Printf("[web] failed to get issues in review: %v", err)
+		} else {
 			for _, issue := range issues {
 				review = append(review, web.ReviewSnapshot{
 					IssueID: issue.ID,
@@ -245,18 +250,18 @@ func (a *snapshotAdapter) Snapshot() web.Snapshot {
 }
 
 // maybeStartWebServer starts the HTTP API server if --port is set.
-func maybeStartWebServer(orch *orchestrator.Orchestrator) *web.Server {
+func maybeStartWebServer(ctx context.Context, orch *orchestrator.Orchestrator) *web.Server {
 	if *port <= 0 {
 		return nil
 	}
 
 	hub := web.NewHub()
 	provider := &snapshotAdapter{orch: orch}
-	srv := web.NewServer(fmt.Sprintf(":%d", *port), provider, hub, orch.Events, orch.Config.MaxConcurrency)
-	srv.StartEventBridge()
+	srv := web.NewServer(fmt.Sprintf("127.0.0.1:%d", *port), provider, hub, orch.Events, orch.Config.MaxConcurrency)
+	srv.StartEventBridge(ctx)
 
 	go func() {
-		if err := srv.Start(); err != nil {
+		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintf(os.Stderr, "HTTP server error: %v\n", err)
 		}
 	}()
@@ -291,7 +296,13 @@ func newAgentRunnerFromConfig(cfg *config.Config) (types.AgentRunner, error) {
 
 func runWithTUI(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal, logger *cliLogger) error {
 	// Start web server if requested
-	_ = maybeStartWebServer(orch)
+	if srv := maybeStartWebServer(ctx, orch); srv != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+		}()
+	}
 
 	// Create TUI model
 	tuiModel := tui.NewModel()
@@ -347,7 +358,13 @@ func runWithTUI(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-
 
 // runDryRun runs a single orchestrator poll cycle and exits.
 func runDryRun(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal, logger *cliLogger) error {
-	_ = maybeStartWebServer(orch)
+	if srv := maybeStartWebServer(ctx, orch); srv != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+		}()
+	}
 
 	eventDone := make(chan struct{})
 	go func() {
@@ -374,7 +391,13 @@ func runDryRun(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-c
 
 // runHeadless runs the orchestrator without TUI, logging to stdout.
 func runHeadless(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal, logger *cliLogger) error {
-	_ = maybeStartWebServer(orch)
+	if srv := maybeStartWebServer(ctx, orch); srv != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+		}()
+	}
 
 	// Start event log goroutine
 	eventDone := make(chan struct{})

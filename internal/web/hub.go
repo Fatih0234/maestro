@@ -30,12 +30,13 @@ func (h *Hub) Subscribe(bufSize int) chan WebEvent {
 	return ch
 }
 
-// Unsubscribe removes a client and closes its channel.
+// Unsubscribe removes a client from the hub.
+// The caller is responsible for detecting the channel is no longer
+// needed (e.g. via request context cancellation).
 func (h *Hub) Unsubscribe(ch chan WebEvent) {
 	h.mu.Lock()
 	delete(h.clients, ch)
 	h.mu.Unlock()
-	close(ch)
 }
 
 // Broadcast sends an event to all subscribers non-blockingly.

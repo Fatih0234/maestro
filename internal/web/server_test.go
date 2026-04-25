@@ -131,7 +131,7 @@ func TestHandleEventsStreamsSnapshotAndEvents(t *testing.T) {
 	hub := NewHub()
 	eventCh := make(chan types.OrchestratorEvent, 4)
 	srv := NewServer(":0", provider, hub, eventCh, 0)
-	srv.StartEventBridge()
+	srv.StartEventBridge(context.Background())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()

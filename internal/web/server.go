@@ -2,6 +2,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -72,6 +73,7 @@ type Server struct {
 	hub              *Hub
 	eventSource      <-chan types.OrchestratorEvent
 	maxConcurrency   int
+	httpServer       *http.Server
 }
 
 // NewServer creates a new web server.
@@ -92,20 +94,45 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
 	mux.HandleFunc("/api/v1/refresh", s.handleRefresh)
 
+	s.httpServer = &http.Server{
+		Addr:        s.addr,
+		Handler:     mux,
+		ReadTimeout: 5 * time.Second,
+		IdleTimeout: 120 * time.Second,
+		// WriteTimeout is intentionally 0 because SSE streams are long-lived.
+	}
+
 	log.Printf("[web] Starting HTTP API on %s", s.addr)
-	return http.ListenAndServe(s.addr, mux)
+	return s.httpServer.ListenAndServe()
+}
+
+// Shutdown gracefully shuts down the HTTP server.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.httpServer == nil {
+		return nil
+	}
+	return s.httpServer.Shutdown(ctx)
 }
 
 // StartEventBridge starts a goroutine that forwards orchestrator events to the hub.
-func (s *Server) StartEventBridge() {
+// The goroutine exits when ctx is cancelled or the event source is closed.
+func (s *Server) StartEventBridge(ctx context.Context) {
 	go func() {
-		for event := range s.eventSource {
-			webEvent, err := toWebEvent(event)
-			if err != nil {
-				log.Printf("[web] failed to convert event: %v", err)
-				continue
+		for {
+			select {
+			case event, ok := <-s.eventSource:
+				if !ok {
+					return
+				}
+				webEvent, err := toWebEvent(event)
+				if err != nil {
+					log.Printf("[web] failed to convert event: %v", err)
+					continue
+				}
+				s.hub.Broadcast(webEvent)
+			case <-ctx.Done():
+				return
 			}
-			s.hub.Broadcast(webEvent)
 		}
 	}()
 }
@@ -135,8 +162,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	if _, ok := w.(http.Flusher); !ok {
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
 		return
 	}
@@ -152,7 +178,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if err := WriteEvent(w, "snapshot", data); err != nil {
 		return
 	}
-	flusher.Flush()
 
 	// Subscribe to live events
 	ch := s.hub.Subscribe(64)
@@ -175,12 +200,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if err := WriteEvent(w, "orchestrator", data); err != nil {
 				return
 			}
-			flusher.Flush()
 		case <-ticker.C:
 			if err := WriteHeartbeat(w); err != nil {
 				return
 			}
-			flusher.Flush()
 		case <-r.Context().Done():
 			return
 		}
