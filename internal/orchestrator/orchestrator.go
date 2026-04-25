@@ -439,7 +439,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 			o.emit(event.Type, event.IssueID, event.Payload)
 		}
 
-		result, err := runner.Run(runCtx, issue, attempt, wrappedEmit)
+		result, err := runner.Run(runCtx, issue, attempt, types.StageExecute, wrappedEmit)
 
 		// If state was already removed by timeout/stall handler, skip.
 		if _, ok := o.State.Get(issueID); !ok {

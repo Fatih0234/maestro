@@ -711,6 +711,56 @@ func TestOpenCodeRunner_ProfileParameter(t *testing.T) {
 	}
 }
 
+func TestOpenCodeRunner_ContextAgentOverridesDefault(t *testing.T) {
+	startStream := make(chan struct{})
+	var receivedBody map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/session":
+			_, _ = io.WriteString(w, `{"id":"sess-ctx-test"}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/prompt_async"):
+			bodyBytes, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(bodyBytes, &receivedBody)
+			w.WriteHeader(http.StatusNoContent)
+			close(startStream)
+		case r.Method == http.MethodGet && r.URL.Path == "/event":
+			setSSEHeaders(w)
+			<-startStream
+			writeSSEEvent(w, "message", `{"type":"session.status","properties":{"sessionID":"sess-ctx-test","status":{"type":"idle"}}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	workspace := t.TempDir()
+	// Create runner with a DEFAULT agent of "coder"
+	runner := NewOpenCodeRunner("opencode serve", 0, "", "", 2*time.Second, "", "coder", "")
+	primeTestOpenCodeServer(runner, workspace, server.URL, 4242)
+
+	// But pass a context that overrides the stage agent to "plan"
+	ctx := types.WithStage(context.Background(), types.StagePlan, "plan")
+	proc, err := runner.Start(ctx, types.Issue{}, workspace, "test prompt")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	select {
+	case <-startStream:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for prompt submission")
+	}
+
+	// Verify the context-overridden agent was used, not the default
+	if agent, ok := receivedBody["agent"].(string); !ok || agent != "plan" {
+		t.Errorf("agent in request body = %v, want 'plan' (context override should win)", receivedBody["agent"])
+	}
+
+	<-proc.Done
+	runner.Close()
+}
+
 // Helper functions for tests
 
 func newTestOpenCodeRunner(serverURL string) *OpenCodeRunner {

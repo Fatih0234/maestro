@@ -1,11 +1,13 @@
 // Package pipeline owns the per-issue stage lifecycle.
 //
-// Currently this is a single-stage execute scaffold. Phase 2 will expand the
-// Run method to orchestrate plan → execute → verify transitions.
+// Phase 2: Run is now stage-aware. The orchestrator calls Run once per stage
+// (plan → execute → verify). Workspace creation is idempotent, so the same
+// worktree is reused across stages.
 package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/fatihkarahan/contrabass-pi/internal/agent"
 	"github.com/fatihkarahan/contrabass-pi/internal/config"
+	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
 	"github.com/fatihkarahan/contrabass-pi/internal/util"
 	"github.com/fatihkarahan/contrabass-pi/internal/workspace"
@@ -36,10 +39,11 @@ type Runner struct {
 	AgentRunner types.AgentRunner
 }
 
-// Result captures the outcome of a single pipeline run.
+// Result captures the outcome of a single pipeline stage run.
 type Result struct {
 	IssueID             string
 	Attempt             int
+	Stage               types.Stage
 	Success             bool
 	Error               error
 	WorkspacePath       string
@@ -51,16 +55,18 @@ type Result struct {
 	TokensOut           int64
 }
 
-// Run executes the full pipeline for one issue.
-// It creates the workspace, starts the agent, monitors events, and returns
-// when the agent completes or the context is cancelled.
-func (r *Runner) Run(ctx context.Context, issue types.Issue, attempt int, emit func(types.OrchestratorEvent)) (*Result, error) {
+// Run executes a single pipeline stage for one issue.
+// It creates (or reuses) the workspace, builds a stage-specific prompt, starts
+// the agent, monitors events, writes stage artifacts, and returns when the
+// agent completes or the context is cancelled.
+func (r *Runner) Run(ctx context.Context, issue types.Issue, attempt int, stage types.Stage, emit func(types.OrchestratorEvent)) (*Result, error) {
 	issueID := issue.ID
 	branchName := r.Config.Workspace.BranchPrefix + util.SanitizeBranchName(issueID)
 	workspacePath := r.Workspace.Path(issueID)
-	prompt := r.buildPrompt(issue)
+	prompt := r.buildStagePrompt(issue, stage)
+	startedAt := time.Now().UTC()
 
-	// 1. Create workspace
+	// 1. Create workspace (idempotent — reused across stages)
 	wsPath, err := r.Workspace.Create(ctx, issue)
 	if err != nil {
 		return nil, fmt.Errorf("workspace creation: %w", err)
@@ -72,7 +78,7 @@ func (r *Runner) Run(ctx context.Context, issue types.Issue, attempt int, emit f
 	emit(types.OrchestratorEvent{
 		Type:      EventWorkspaceCreated,
 		IssueID:   issueID,
-		Timestamp: time.Now().UTC(),
+		Timestamp: startedAt,
 		Payload:   map[string]string{"path": workspacePath},
 	})
 
@@ -80,13 +86,41 @@ func (r *Runner) Run(ctx context.Context, issue types.Issue, attempt int, emit f
 	emit(types.OrchestratorEvent{
 		Type:      EventPromptBuilt,
 		IssueID:   issueID,
-		Timestamp: time.Now().UTC(),
+		Timestamp: startedAt,
 		Payload:   map[string]int{"length": len(prompt)},
 	})
 
-	// 3. Start agent
+	// 3. Begin stage recording
+	var stageRecorder *diagnostics.StageRecorder
+	attemptRecorder, _ := diagnostics.AttemptFromContext(ctx)
+	if attemptRecorder != nil {
+		manifest := types.StageManifest{
+			Stage:         stage,
+			Attempt:       attempt,
+			Status:        types.StageStateRunning,
+			WorkspacePath: workspacePath,
+			StartedAt:     startedAt,
+		}
+		if sr, err := attemptRecorder.BeginStage(manifest, prompt); err == nil {
+			stageRecorder = sr
+		}
+	}
+
+	// 4. Start agent
 	proc, err := r.AgentRunner.Start(ctx, issue, workspacePath, prompt)
 	if err != nil {
+		if stageRecorder != nil {
+			result := types.StageResult{
+				Stage:       stage,
+				Status:      types.StageStateFailed,
+				Summary:     fmt.Sprintf("agent start failed: %v", err),
+				FailureKind: types.StageFailureSessionStartError,
+				Retryable:   true,
+				StartedAt:   startedAt,
+				FinishedAt:  time.Now().UTC(),
+			}
+			_ = stageRecorder.Finish(result, "", "")
+		}
 		return nil, fmt.Errorf("agent start: %w", err)
 	}
 
@@ -100,9 +134,10 @@ func (r *Runner) Run(ctx context.Context, issue types.Issue, attempt int, emit f
 		},
 	})
 
-	// 4. Monitor agent
+	// 5. Monitor agent
 	var tokensIn, tokensOut int64
 	var runErr error
+	var responseText strings.Builder
 
 monitor:
 	for {
@@ -131,6 +166,7 @@ monitor:
 			}
 			if event.Type == agent.EventTypeMessageUpdated {
 				if text := agent.ExtractTextContent(event); text != "" {
+					responseText.WriteString(text)
 					emit(types.OrchestratorEvent{
 						Type:      EventAgentOutput,
 						IssueID:   issueID,
@@ -139,19 +175,56 @@ monitor:
 					})
 				}
 			}
+			if stageRecorder != nil {
+				_ = stageRecorder.AppendEvent(types.OrchestratorEvent{
+					Type:      event.Type,
+					IssueID:   issueID,
+					Timestamp: time.Now().UTC(),
+					Payload:   event.Payload,
+				})
+			}
 		case err := <-proc.Done:
 			runErr = err
 			break monitor
 		}
 	}
 
-	// 5. Capture postflight
+	// 6. Capture postflight
 	postflightStatus, postflightWorktrees := r.captureGitState(r.Workspace.BaseDir())
 	finalCommit := r.captureCommit(ctx, workspacePath)
+	diff := r.captureDiff(ctx, workspacePath)
+
+	// 7. Finalize stage recording
+	if stageRecorder != nil {
+		var result types.StageResult
+		if runErr == nil {
+			result = types.StageResult{
+				Stage:      stage,
+				Status:     types.StageStatePassed,
+				Summary:    fmt.Sprintf("%s stage completed successfully", stage),
+				Retryable:  false,
+				NextAction: stage.NextAction(),
+				StartedAt:  startedAt,
+				FinishedAt: time.Now().UTC(),
+			}
+		} else {
+			result = types.StageResult{
+				Stage:       stage,
+				Status:      types.StageStateFailed,
+				Summary:     runErr.Error(),
+				FailureKind: r.classifyFailure(runErr, stage),
+				Retryable:   true,
+				StartedAt:   startedAt,
+				FinishedAt:  time.Now().UTC(),
+			}
+		}
+		_ = stageRecorder.Finish(result, responseText.String(), diff)
+	}
 
 	return &Result{
 		IssueID:             issueID,
 		Attempt:             attempt,
+		Stage:               stage,
 		Success:             runErr == nil,
 		Error:               runErr,
 		WorkspacePath:       workspacePath,
@@ -179,6 +252,73 @@ func (r *Runner) buildPrompt(issue types.Issue) string {
 	}
 	template = strings.ReplaceAll(template, "{{ issue.labels }}", labels)
 	return strings.TrimSpace(template)
+}
+
+// buildStagePrompt wraps the base prompt with stage-specific intent so the
+// agent knows whether it should plan, implement, or verify.
+func (r *Runner) buildStagePrompt(issue types.Issue, stage types.Stage) string {
+	base := r.buildPrompt(issue)
+
+	switch stage {
+	case types.StagePlan:
+		return fmt.Sprintf(`You are in PLANNING mode. Analyze the following issue and produce a concrete implementation plan.
+
+%s
+
+Your plan should include:
+- What files need to change
+- What the changes should do
+- How to verify the changes work
+- Any risks or edge cases
+
+Do NOT make any code changes yet.`, base)
+
+	case types.StageExecute:
+		return fmt.Sprintf(`You are in EXECUTION mode. Implement the following task.
+
+%s
+
+Make the necessary code changes to fulfill the requirements.`, base)
+
+	case types.StageVerify:
+		return fmt.Sprintf(`You are in VERIFICATION mode. Review the implementation against the requirements.
+
+%s
+
+Verify that:
+- The changes satisfy the issue
+- Tests pass (if applicable)
+- No unintended side effects were introduced
+
+Provide a pass/fail assessment with evidence.`, base)
+
+	default:
+		return base
+	}
+}
+
+// classifyFailure maps a runtime error to a typed stage failure kind.
+func (r *Runner) classifyFailure(err error, stage types.Stage) types.StageFailureKind {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return types.StageFailureTimeout
+	}
+	switch stage {
+	case types.StagePlan:
+		return types.StageFailureModelFailure
+	case types.StageExecute:
+		return types.StageFailureToolError
+	case types.StageVerify:
+		return types.StageFailureVerification
+	default:
+		return types.StageFailureToolError
+	}
+}
+
+func (r *Runner) captureDiff(ctx context.Context, dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	return r.gitOutput(ctx, dir, "diff", "HEAD")
 }
 
 func (r *Runner) captureGitState(baseDir string) (string, string) {
