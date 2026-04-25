@@ -6,14 +6,16 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/agent"
 	"github.com/fatihkarahan/contrabass-pi/internal/config"
 	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
+	"github.com/fatihkarahan/contrabass-pi/internal/pipeline"
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/contrabass-pi/internal/util"
 	"github.com/fatihkarahan/contrabass-pi/internal/workspace"
 )
 
@@ -160,18 +162,13 @@ func (o *Orchestrator) reconcileRunning() {
 func (o *Orchestrator) handleTimeout(run *RunState, elapsed time.Duration) {
 	issueID := run.Issue.ID
 
-	// Cancel the run's context
+	// Cancel the run's context. The pipeline runner will stop the agent.
 	o.mu.Lock()
 	if cancel, ok := o.running[issueID]; ok {
 		cancel()
 		delete(o.running, issueID)
 	}
 	o.mu.Unlock()
-
-	// Stop agent process
-	if run.Process != nil {
-		_ = o.AgentRunner.Stop(run.Process)
-	}
 
 	// Emit timeout event
 	o.emit(EventTimeoutDetected, issueID, TimeoutDetectedPayload{
@@ -183,11 +180,7 @@ func (o *Orchestrator) handleTimeout(run *RunState, elapsed time.Duration) {
 	attempt := run.Attempt + 1
 	entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("timeout after %v", elapsed))
 
-	if o.Recorder != nil {
-		postflightStatus, postflightWorktrees := o.captureGitState(o.workspaceBaseDir())
-		finalCommit := o.captureCommit(o.ctx, o.workspacePath(issueID))
-		_ = o.Recorder.FinalizeAttempt(issueID, run.Attempt, "timed_out", finalCommit, &entry.RetryAt, fmt.Errorf("timeout after %v", elapsed), postflightStatus, postflightWorktrees)
-	}
+	o.finalizeAttempt(issueID, run.Attempt, "timed_out", &entry.RetryAt, fmt.Errorf("timeout after %v", elapsed))
 
 	o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
 		IssueID: issueID,
@@ -206,18 +199,13 @@ func (o *Orchestrator) handleTimeout(run *RunState, elapsed time.Duration) {
 func (o *Orchestrator) handleStall(run *RunState, lastEventAge time.Duration) {
 	issueID := run.Issue.ID
 
-	// Cancel the run's context
+	// Cancel the run's context. The pipeline runner will stop the agent.
 	o.mu.Lock()
 	if cancel, ok := o.running[issueID]; ok {
 		cancel()
 		delete(o.running, issueID)
 	}
 	o.mu.Unlock()
-
-	// Stop agent process
-	if run.Process != nil {
-		_ = o.AgentRunner.Stop(run.Process)
-	}
 
 	// Emit stall event
 	o.emit(EventStallDetected, issueID, StallDetectedPayload{
@@ -231,11 +219,7 @@ func (o *Orchestrator) handleStall(run *RunState, lastEventAge time.Duration) {
 	attempt := run.Attempt + 1
 	entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("stall: no event for %v", lastEventAge))
 
-	if o.Recorder != nil {
-		postflightStatus, postflightWorktrees := o.captureGitState(o.workspaceBaseDir())
-		finalCommit := o.captureCommit(o.ctx, o.workspacePath(issueID))
-		_ = o.Recorder.FinalizeAttempt(issueID, run.Attempt, "stalled", finalCommit, &entry.RetryAt, fmt.Errorf("stall: no event for %v", lastEventAge), postflightStatus, postflightWorktrees)
-	}
+	o.finalizeAttempt(issueID, run.Attempt, "stalled", &entry.RetryAt, fmt.Errorf("stall: no event for %v", lastEventAge))
 
 	o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
 		IssueID: issueID,
@@ -261,11 +245,10 @@ func (o *Orchestrator) dispatchBackoff() {
 			return
 		}
 
-		// Skip if at capacity - re-add entry to backoff to preserve it
+		// Skip if at capacity — the entry stays in the backoff map with its
+		// original RetryAt and will be ready again on the next poll.
 		if o.Config.MaxConcurrency > 0 && o.State.Len() >= o.Config.MaxConcurrency {
-			// Re-add with same attempt to preserve retry position
-			o.Backoff.Enqueue(entry.IssueID, entry.Attempt, entry.Error)
-			return
+			break
 		}
 
 		if o.isClosed() {
@@ -308,6 +291,13 @@ func (o *Orchestrator) dispatchReady() {
 	if err != nil {
 		return
 	}
+
+	sort.Slice(issues, func(i, j int) bool {
+		if issues[i].CreatedAt.Equal(issues[j].CreatedAt) {
+			return issues[i].ID < issues[j].ID
+		}
+		return issues[i].CreatedAt.Before(issues[j].CreatedAt)
+	})
 
 	for _, issue := range issues {
 		if o.isClosed() {
@@ -383,79 +373,164 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int) {
 		}
 	}
 
-	if o.isClosed() {
-		runCancel()
-		o.removeRunning(issueID)
-		return
+	// Attach stage context so the agent runner can select the right agent/profile.
+	stageAgent := ""
+	if o.Config.OpenCode != nil {
+		stageAgent = o.Config.OpenCode.AgentForStage(types.StageExecute.String())
 	}
+	runCtx = types.WithStage(runCtx, types.StageExecute, stageAgent)
 
-	// 1. Create workspace
-	wsPath, err := o.Workspace.Create(runCtx, issue)
-	if err != nil {
-		runCancel()
-		o.removeRunning(issueID)
-		o.handleStartError(issue, attempt, err, "workspace creation failed")
-		return
-	}
-	if wsPath != "" {
-		workspacePath = wsPath
-	}
+	// Add to active state
+	o.State.Add(issueID, issue, attempt, nil)
 
-	if o.Recorder != nil {
-		if commit := o.captureCommit(runCtx, workspacePath); commit != "" {
-			_ = o.Recorder.UpdateAttemptStartCommit(issueID, attempt, commit)
-		}
-	}
-
-	o.State.UpdatePhase(issueID, types.PhasePreparingWorkspace)
-	o.emit(EventWorkspaceCreated, issueID, WorkspaceCreatedPayload{
-		IssueID: issueID,
-		Path:    workspacePath,
-	})
-
-	// 2. Build prompt from template
-	o.State.UpdatePhase(issueID, types.PhaseBuildingPrompt)
-	o.emit(EventPromptBuilt, issueID, PromptBuiltPayload{
-		IssueID: issueID,
-		Length:  len(prompt),
-	})
-
-	// 3. Start agent
-	if o.isClosed() {
-		runCancel()
-		o.removeRunning(issueID)
-		return
-	}
-
-	o.State.UpdatePhase(issueID, types.PhaseLaunchingAgentProcess)
-	proc, err := o.AgentRunner.Start(runCtx, issue, workspacePath, prompt)
-	if err != nil {
-		runCancel()
-		o.removeRunning(issueID)
-		o.handleStartError(issue, attempt, err, "agent start failed")
-		return
-	}
-
-	// 4. Add to state
-	o.State.Add(issueID, issue, attempt, proc)
-	o.State.UpdatePhase(issueID, types.PhaseInitializingSession)
-
-	if o.Recorder != nil {
-		_ = o.Recorder.UpdateAttemptLaunchInfo(issueID, attempt, proc.PID, proc.SessionID, proc.ServerURL)
-	}
-
-	// 5. Emit agent started
-	o.emit(EventAgentStarted, issueID, AgentStartedPayload{
-		IssueID:   issueID,
-		PID:       proc.PID,
-		SessionID: proc.SessionID,
-	})
-
-	// 6. Spawn goroutine to monitor this agent
+	// Spawn goroutine to run the pipeline
 	o.wg.Add(1)
 	go func() {
 		defer o.wg.Done()
-		o.monitorAgent(issueID, proc, runCancel)
+		defer runCancel()
+		defer o.removeRunning(issueID)
+
+		runner := &pipeline.Runner{
+			Config:      o.Config,
+			Workspace:   o.Workspace,
+			AgentRunner: o.AgentRunner,
+		}
+
+		// Intercept runner events to update orchestrator state and emit to the TUI.
+		wrappedEmit := func(event types.OrchestratorEvent) {
+			if event.IssueID == issueID {
+				o.State.UpdateLastEvent(issueID)
+				switch event.Type {
+				case pipeline.EventTokensUpdated:
+					if payload, ok := event.Payload.(map[string]int64); ok {
+						o.State.UpdateTokens(issueID, payload["tokens_in"], payload["tokens_out"])
+						o.emit(EventTokensUpdated, issueID, TokensUpdatedPayload{
+							IssueID:   issueID,
+							TokensIn:  payload["tokens_in"],
+							TokensOut: payload["tokens_out"],
+						})
+						return
+					}
+				case pipeline.EventAgentOutput:
+					if payload, ok := event.Payload.(map[string]string); ok {
+						o.emit(EventAgentOutput, issueID, AgentOutputPayload{
+							IssueID: issueID,
+							Text:    payload["text"],
+						})
+						return
+					}
+				case pipeline.EventAgentStarted:
+					if payload, ok := event.Payload.(map[string]interface{}); ok {
+						pid, _ := payload["pid"].(int)
+						sessionID, _ := payload["session_id"].(string)
+						if o.Recorder != nil {
+							_ = o.Recorder.UpdateAttemptLaunchInfo(issueID, attempt, pid, sessionID, "")
+						}
+						o.emit(EventAgentStarted, issueID, AgentStartedPayload{
+							IssueID:   issueID,
+							PID:       pid,
+							SessionID: sessionID,
+						})
+						return
+					}
+				}
+			}
+			// Forward workspace/prompt events directly.
+			o.emit(event.Type, event.IssueID, event.Payload)
+		}
+
+		result, err := runner.Run(runCtx, issue, attempt, wrappedEmit)
+
+		// If state was already removed by timeout/stall handler, skip.
+		if _, ok := o.State.Get(issueID); !ok {
+			return
+		}
+
+		if err != nil {
+			// Workspace or agent start failed.
+			o.State.UpdatePhase(issueID, types.PhaseFailed)
+			o.State.Remove(issueID)
+
+			entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("pipeline run failed: %v", err))
+			o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
+
+			o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+				IssueID: issueID,
+				Success: false,
+				Error:   err.Error(),
+			})
+			o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
+				IssueID: issueID,
+				Attempt: attempt,
+				RetryAt: entry.RetryAt,
+			})
+			return
+		}
+
+		if result.Success {
+			// Runtime completion hands off to human review.
+			o.State.UpdatePhase(issueID, types.PhaseSucceeded)
+			if _, err := o.Tracker.UpdateIssueState(issueID, types.StateInReview); err != nil {
+				nextAttempt := result.Attempt + 1
+				o.State.UpdatePhase(issueID, types.PhaseFailed)
+				o.State.Remove(issueID)
+
+				entry := o.Backoff.Enqueue(issueID, nextAttempt, fmt.Sprintf("review handoff failed: %v", err))
+				o.finalizeAttempt(issueID, result.Attempt, "retry_queued", &entry.RetryAt, err)
+
+				o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+					IssueID: issueID,
+					Success: false,
+					Error:   err.Error(),
+				})
+				o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
+					IssueID: issueID,
+					Attempt: nextAttempt,
+					RetryAt: entry.RetryAt,
+				})
+				return
+			}
+
+			o.State.Remove(issueID)
+			o.Backoff.Remove(issueID)
+
+			o.finalizeAttempt(issueID, result.Attempt, "awaiting_review", nil, nil)
+
+			o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+				IssueID: issueID,
+				Success: true,
+				Error:   "",
+			})
+			o.emit(EventIssueReadyForReview, issueID, IssueReadyForReviewPayload{
+				IssueID:       issueID,
+				Branch:        result.Branch,
+				WorkspacePath: result.WorkspacePath,
+			})
+		} else {
+			// Failure - enqueue retry
+			nextAttempt := result.Attempt + 1
+			o.State.UpdatePhase(issueID, types.PhaseFailed)
+			o.State.Remove(issueID)
+
+			var errMsg string
+			if result.Error != nil {
+				errMsg = result.Error.Error()
+			}
+			entry := o.Backoff.Enqueue(issueID, nextAttempt, errMsg)
+
+			o.finalizeAttempt(issueID, result.Attempt, "retry_queued", &entry.RetryAt, result.Error)
+
+			o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+				IssueID: issueID,
+				Success: false,
+				Error:   errMsg,
+			})
+			o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
+				IssueID: issueID,
+				Attempt: nextAttempt,
+				RetryAt: entry.RetryAt,
+			})
+		}
 	}()
 }
 
@@ -524,153 +599,13 @@ func (o *Orchestrator) buildPrompt(issue types.Issue) string {
 	return strings.TrimSpace(template)
 }
 
-// monitorAgent monitors an agent process and handles its events.
-func (o *Orchestrator) monitorAgent(issueID string, proc *types.AgentProcess, runCancel context.CancelFunc) {
-	defer func() {
-		if r := recover(); r != nil {
-			// Channel closed or panic
-		}
-		runCancel()
-		o.removeRunning(issueID)
-	}()
-
-	for {
-		select {
-		case <-o.ctx.Done():
-			return
-		case event, ok := <-proc.Events:
-			if !ok {
-				// Events channel closed - check done channel
-				select {
-				case err := <-proc.Done:
-					o.handleAgentDone(issueID, err)
-				default:
-				}
-				return
-			}
-			o.handleAgentEvent(issueID, event)
-		case err := <-proc.Done:
-			o.handleAgentDone(issueID, err)
-			return
-		}
-	}
-}
-
-// handleAgentEvent processes an agent event.
-func (o *Orchestrator) handleAgentEvent(issueID string, event types.AgentEvent) {
-	// Update last event timestamp
-	o.State.UpdateLastEvent(issueID)
-
-	// Extract and update tokens
-	if tokensIn, tokensOut := agent.ExtractTokens(event); tokensIn > 0 || tokensOut > 0 {
-		o.State.UpdateTokens(issueID, tokensIn, tokensOut)
-		o.emit(EventTokensUpdated, issueID, TokensUpdatedPayload{
-			IssueID:   issueID,
-			TokensIn:  tokensIn,
-			TokensOut: tokensOut,
-		})
-	}
-
-	// Handle message content for output display
-	if event.Type == agent.EventTypeMessageUpdated {
-		if text := extractTextContent(event); text != "" {
-			o.emit(EventAgentOutput, issueID, AgentOutputPayload{
-				IssueID: issueID,
-				Text:    text,
-			})
-		}
-	}
-}
-
-// handleAgentDone handles when an agent completes or errors.
-func (o *Orchestrator) handleAgentDone(issueID string, runErr error) {
-	run, ok := o.State.Get(issueID)
-	if !ok {
-		return
-	}
-
-	// Update last event timestamp
-	o.State.UpdateLastEvent(issueID)
-
-	if runErr == nil {
-		// Success
-		o.State.UpdatePhase(issueID, types.PhaseSucceeded)
-
-		// Runtime completion hands off to human review.
-		// Business completion (done) is human-only.
-		if _, err := o.Tracker.UpdateIssueState(issueID, types.StateInReview); err != nil {
-			attempt := run.Attempt + 1
-			o.State.UpdatePhase(issueID, types.PhaseFailed)
-			o.State.Remove(issueID)
-
-			entry := o.Backoff.Enqueue(issueID, attempt, fmt.Sprintf("review handoff failed: %v", err))
-			postflightStatus, postflightWorktrees := o.captureGitState(o.workspaceBaseDir())
-			finalCommit := o.captureCommit(o.ctx, o.workspacePath(issueID))
-			if o.Recorder != nil {
-				_ = o.Recorder.FinalizeAttempt(issueID, run.Attempt, "retry_queued", finalCommit, &entry.RetryAt, err, postflightStatus, postflightWorktrees)
-			}
-
-			o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
-				IssueID: issueID,
-				Success: false,
-				Error:   err.Error(),
-			})
-			o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
-				IssueID: issueID,
-				Attempt: attempt,
-				RetryAt: entry.RetryAt,
-			})
-			return
-		}
-
-		o.State.Remove(issueID)
-
-		workspacePath := o.workspacePath(issueID)
-		branchName := o.branchName(issueID)
-		finalCommit := o.captureCommit(o.ctx, workspacePath)
-
-		postflightStatus, postflightWorktrees := o.captureGitState(o.workspaceBaseDir())
-		if o.Recorder != nil {
-			_ = o.Recorder.FinalizeAttempt(issueID, run.Attempt, "awaiting_review", finalCommit, nil, nil, postflightStatus, postflightWorktrees)
-		}
-
-		// Remove from backoff
-		o.Backoff.Remove(issueID)
-
-		o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
-			IssueID: issueID,
-			Success: true,
-			Error:   "",
-		})
-		o.emit(EventIssueReadyForReview, issueID, IssueReadyForReviewPayload{
-			IssueID:       issueID,
-			Branch:        branchName,
-			WorkspacePath: workspacePath,
-		})
-	} else {
-		// Failure - enqueue retry
-		attempt := run.Attempt + 1
-		o.State.UpdatePhase(issueID, types.PhaseFailed)
-		o.State.Remove(issueID)
-
-		entry := o.Backoff.Enqueue(issueID, attempt, runErr.Error())
-
-		postflightStatus, postflightWorktrees := o.captureGitState(o.workspaceBaseDir())
-		finalCommit := o.captureCommit(o.ctx, o.workspacePath(issueID))
-		if o.Recorder != nil {
-			_ = o.Recorder.FinalizeAttempt(issueID, run.Attempt, "retry_queued", finalCommit, &entry.RetryAt, runErr, postflightStatus, postflightWorktrees)
-		}
-
-		o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
-			IssueID: issueID,
-			Success: false,
-			Error:   runErr.Error(),
-		})
-		o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
-			IssueID: issueID,
-			Attempt: attempt,
-			RetryAt: entry.RetryAt,
-		})
+// finalizeAttempt captures postflight git state and finalizes the attempt
+// in the recorder. It is a no-op when the recorder is nil.
+func (o *Orchestrator) finalizeAttempt(issueID string, attempt int, outcome string, retryAt *time.Time, runErr error) {
+	postflightStatus, postflightWorktrees := o.captureGitState(o.workspaceBaseDir())
+	finalCommit := o.captureCommit(o.ctx, o.workspacePath(issueID))
+	if o.Recorder != nil {
+		_ = o.Recorder.FinalizeAttempt(issueID, attempt, outcome, finalCommit, retryAt, runErr, postflightStatus, postflightWorktrees)
 	}
 }
 
@@ -751,40 +686,16 @@ func (o *Orchestrator) Stop() {
 	o.mu.Unlock()
 }
 
-type workspaceLocator interface {
-	Path(issueID string) string
-	BaseDir() string
-}
-
 func (o *Orchestrator) workspacePath(issueID string) string {
-	if locator, ok := o.Workspace.(workspaceLocator); ok {
-		return locator.Path(issueID)
-	}
-	return ""
+	return o.Workspace.Path(issueID)
 }
 
 func (o *Orchestrator) workspaceBaseDir() string {
-	if locator, ok := o.Workspace.(workspaceLocator); ok {
-		return locator.BaseDir()
-	}
-	return ""
+	return o.Workspace.BaseDir()
 }
 
 func (o *Orchestrator) branchName(issueID string) string {
-	return o.Config.Workspace.BranchPrefix + sanitizeBranchName(issueID)
-}
-
-func sanitizeBranchName(id string) string {
-	var result strings.Builder
-	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') || r == '_' || r == '/' || r == '-' {
-			result.WriteRune(r)
-		} else {
-			result.WriteRune('-')
-		}
-	}
-	return result.String()
+	return o.Config.Workspace.BranchPrefix + util.SanitizeBranchName(issueID)
 }
 
 func (o *Orchestrator) captureGitState(baseDir string) (string, string) {
@@ -821,24 +732,4 @@ func captureGitOutput(ctx context.Context, dir string, args ...string) string {
 	return text
 }
 
-// extractTextContent extracts text content from an agent event.
-func extractTextContent(event types.AgentEvent) string {
-	payload, ok := event.Payload.(map[string]interface{})
-	if !ok {
-		return ""
-	}
 
-	// Try to extract text from various event structures
-	if part, ok := payload["part"].(map[string]interface{}); ok {
-		if text, ok := part["text"].(string); ok {
-			return text
-		}
-	}
-
-	// Try "text" field at top level
-	if text, ok := payload["text"].(string); ok {
-		return text
-	}
-
-	return ""
-}

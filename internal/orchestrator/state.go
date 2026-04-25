@@ -15,6 +15,7 @@ type RunState struct {
 	Attempt     int                // Current attempt number (1, 2, 3, ...)
 	Process     *types.AgentProcess // The agent process
 	Phase       types.RunPhase     // Current phase
+	Stage       types.Stage        // Current pipeline stage
 	StartedAt   time.Time          // When the run started
 	LastEventAt time.Time           // When the last event was received
 	TokensIn    int64              // Tokens sent to agent
@@ -46,11 +47,22 @@ func (s *StateManager) Add(issueID string, issue types.Issue, attempt int, proc 
 		Attempt:     attempt,
 		Process:     proc,
 		Phase:       types.PhaseLaunchingAgentProcess,
+		Stage:       types.StageExecute,
 		StartedAt:   now,
 		LastEventAt: now,
 		TokensIn:    0,
 		TokensOut:   0,
 		Error:       "",
+	}
+}
+
+// UpdateStage updates the pipeline stage for a run.
+func (s *StateManager) UpdateStage(issueID string, stage types.Stage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if run, ok := s.runs[issueID]; ok {
+		run.Stage = stage
 	}
 }
 

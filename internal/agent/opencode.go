@@ -599,9 +599,13 @@ func (r *OpenCodeRunner) submitPrompt(ctx context.Context, serverURL, sessionID,
 			{"type": "text", "text": prompt},
 		},
 	}
-	// Set agent if configured
-	if r.agent != "" {
-		body["agent"] = r.agent
+	// Set agent if configured. Stage context takes priority over the default.
+	agentName := r.agent
+	if sc, ok := types.StageFromContext(ctx); ok && sc.Agent != "" {
+		agentName = sc.Agent
+	}
+	if agentName != "" {
+		body["agent"] = agentName
 	}
 	resp, err := r.doRequest(ctx, http.MethodPost, serverURL+"/session/"+sessionID+"/prompt_async", body, nil)
 	if err != nil {

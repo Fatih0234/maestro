@@ -45,59 +45,40 @@ func TestDurationString(t *testing.T) {
 	}
 }
 
-func TestCompactPhase(t *testing.T) {
+func TestCompactStage(t *testing.T) {
 	tests := []struct {
-		phase types.RunPhase
+		stage types.Stage
 		want  string
 	}{
-		{types.PhasePreparingWorkspace, "Prep"},
-		{types.PhaseBuildingPrompt, "Prompt"},
-		{types.PhaseLaunchingAgentProcess, "Launch"},
-		{types.PhaseInitializingSession, "Init"},
-		{types.PhaseStreamingTurn, "Turn"},
-		{types.PhaseFinishing, "Finish"},
-		{types.PhaseSucceeded, "Done"},
-		{types.PhaseFailed, "Failed"},
-		{types.PhaseTimedOut, "Timeout"},
-		{types.PhaseStalled, "Stalled"},
+		{types.StagePlan, "Plan"},
+		{types.StageExecute, "Exec"},
+		{types.StageVerify, "Verify"},
+		{types.StageHumanReview, "Review"},
 	}
 
 	for _, tt := range tests {
-		t.Run(string(tt.phase.String()), func(t *testing.T) {
-			got := compactPhase(tt.phase)
+		t.Run(string(tt.stage), func(t *testing.T) {
+			got := compactStage(tt.stage)
 			if got != tt.want {
-				t.Errorf("compactPhase(%v) = %s, want %s", tt.phase, got, tt.want)
+				t.Errorf("compactStage(%v) = %s, want %s", tt.stage, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestIsActivePhase(t *testing.T) {
-	activePhases := []types.RunPhase{
-		types.PhaseInitializingSession,
-		types.PhaseLaunchingAgentProcess,
-		types.PhasePreparingWorkspace,
-		types.PhaseBuildingPrompt,
-		types.PhaseStreamingTurn,
-		types.PhaseFinishing,
-	}
+func TestIsActiveStatus(t *testing.T) {
+	activeStatuses := []string{"running"}
+	inactiveStatuses := []string{"done", "failed", "timeout", "stalled", ""}
 
-	inactivePhases := []types.RunPhase{
-		types.PhaseSucceeded,
-		types.PhaseFailed,
-		types.PhaseTimedOut,
-		types.PhaseStalled,
-	}
-
-	for _, p := range activePhases {
-		if !isActivePhase(p) {
-			t.Errorf("isActivePhase(%v) = false, want true", p)
+	for _, s := range activeStatuses {
+		if !isActiveStatus(s) {
+			t.Errorf("isActiveStatus(%q) = false, want true", s)
 		}
 	}
 
-	for _, p := range inactivePhases {
-		if isActivePhase(p) {
-			t.Errorf("isActivePhase(%v) = true, want false", p)
+	for _, s := range inactiveStatuses {
+		if isActiveStatus(s) {
+			t.Errorf("isActiveStatus(%q) = true, want false", s)
 		}
 	}
 }
@@ -158,7 +139,7 @@ func TestNewTable(t *testing.T) {
 func TestTableUpdate(t *testing.T) {
 	tbl := NewTable()
 	rows := []SessionRow{
-		{IssueID: "CB-1", Title: "Test Issue", Phase: types.PhaseInitializingSession, PID: 1234},
+		{IssueID: "CB-1", Title: "Test Issue", Stage: types.StageExecute, Status: "running", PID: 1234},
 	}
 	tbl = tbl.Update(rows, "")
 	if len(tbl.rows) != 1 {
@@ -276,22 +257,22 @@ func TestModelApplyOrchestratorEvent_IssueCompletedRemovesReviewEntry(t *testing
 
 func TestStatusGlyph(t *testing.T) {
 	tests := []struct {
-		phase   types.RunPhase
+		status  string
 		spinner string
 		want    string
 	}{
-		{types.PhaseStreamingTurn, "●", "●"},
-		{types.PhaseSucceeded, "", "✓"},
-		{types.PhaseFailed, "", "✗"},
-		{types.PhaseTimedOut, "", "⏱"},
-		{types.PhaseStalled, "", "⚠"},
+		{"running", "●", "●"},
+		{"done", "", "✓"},
+		{"failed", "", "✗"},
+		{"timeout", "", "⏱"},
+		{"stalled", "", "⚠"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.phase.String(), func(t *testing.T) {
-			got := statusGlyph(tt.phase, tt.spinner)
+		t.Run(tt.status, func(t *testing.T) {
+			got := statusGlyph(tt.status, tt.spinner)
 			if got != tt.want {
-				t.Errorf("statusGlyph(%v, %q) = %q, want %q", tt.phase, tt.spinner, got, tt.want)
+				t.Errorf("statusGlyph(%q, %q) = %q, want %q", tt.status, tt.spinner, got, tt.want)
 			}
 		})
 	}

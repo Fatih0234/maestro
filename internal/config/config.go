@@ -53,13 +53,14 @@ type AgentConfig struct {
 
 // OpenCodeConfig holds OpenCode-specific settings.
 type OpenCodeConfig struct {
-	BinaryPath string `yaml:"binary_path"` // Path to opencode binary (default: opencode serve)
-	Port       int    `yaml:"port"`        // Server port (0 = auto)
-	Password   string `yaml:"password"`    // Server password (optional)
-	Model      string `yaml:"model"`       // Deprecated: model is set in profile config
-	Profile    string `yaml:"profile"`     // Profile name (e.g., "ws", "omo-power") - maps to ~/.config/opencode/profiles/<profile>/opencode.jsonc
-	Agent      string `yaml:"agent"`       // Default agent (e.g., "scribe", "build", "plan", "explore", "coder")
-	ConfigDir  string `yaml:"config_dir"`  // Optional custom .opencode directory
+	BinaryPath string            `yaml:"binary_path"` // Path to opencode binary (default: opencode serve)
+	Port       int               `yaml:"port"`        // Server port (0 = auto)
+	Password   string            `yaml:"password"`    // Server password (optional)
+	Model      string            `yaml:"model"`       // Deprecated: model is set in profile config
+	Profile    string            `yaml:"profile"`     // Profile name (e.g., "ws", "omo-power") - maps to ~/.config/opencode/profiles/<profile>/opencode.jsonc
+	Agent      string            `yaml:"agent"`       // Default agent (e.g., "scribe", "build", "plan", "explore", "coder")
+	Agents     map[string]string `yaml:"agents"`      // Per-stage agent mapping: stage -> agent name
+	ConfigDir  string            `yaml:"config_dir"`  // Optional custom .opencode directory
 }
 
 // CodexConfig holds Codex-specific settings.
@@ -184,6 +185,18 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// AgentForStage returns the agent name for a pipeline stage.
+// Falls back to the top-level Agent field if the stage is not mapped.
+func (c *OpenCodeConfig) AgentForStage(stage string) string {
+	if c == nil {
+		return ""
+	}
+	if agent, ok := c.Agents[stage]; ok && strings.TrimSpace(agent) != "" {
+		return agent
+	}
+	return strings.TrimSpace(c.Agent)
 }
 
 // Validate checks if the configuration is valid.

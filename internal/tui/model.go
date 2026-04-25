@@ -49,7 +49,8 @@ type Model struct {
 type AgentRow struct {
 	IssueID   string
 	Title     string
-	Phase     types.RunPhase
+	Stage     types.Stage
+	Status    string
 	PID       int
 	Age       string
 	TokensIn  int64
@@ -221,7 +222,8 @@ func (m Model) renderTable() string {
 		sessionRows = append(sessionRows, SessionRow{
 			IssueID:   row.IssueID,
 			Title:     row.Title,
-			Phase:     row.Phase,
+			Stage:     row.Stage,
+			Status:    row.Status,
 			PID:       row.PID,
 			Age:       row.Age,
 			TokensIn:  row.TokensIn,
@@ -366,7 +368,8 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 			}
 			m.agents[event.IssueID] = AgentRow{
 				IssueID:   issueID,
-				Phase:     types.PhaseInitializingSession,
+				Stage:     types.StageExecute,
+				Status:    "running",
 				PID:       payload.PID,
 				SessionID: payload.SessionID,
 				StartTime: event.Timestamp,
@@ -391,7 +394,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 			if !payload.Success {
 				// Move to backoff or failed state
 				if row, exists := m.agents[event.IssueID]; exists {
-					row.Phase = types.PhaseFailed
+					row.Status = "failed"
 					row.LastEvent = "failed"
 					m.agents[event.IssueID] = row
 				}
@@ -440,14 +443,14 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 
 	case orchestrator.EventTimeoutDetected:
 		if row, exists := m.agents[event.IssueID]; exists {
-			row.Phase = types.PhaseTimedOut
+			row.Status = "timeout"
 			row.LastEvent = "timeout"
 			m.agents[event.IssueID] = row
 		}
 
 	case orchestrator.EventStallDetected:
 		if row, exists := m.agents[event.IssueID]; exists {
-			row.Phase = types.PhaseStalled
+			row.Status = "stalled"
 			row.LastEvent = "stalled"
 			m.agents[event.IssueID] = row
 		}
@@ -602,43 +605,21 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-func compactPhase(phase types.RunPhase) string {
-	switch phase {
-	case types.PhasePreparingWorkspace:
-		return "Prep"
-	case types.PhaseBuildingPrompt:
-		return "Prompt"
-	case types.PhaseLaunchingAgentProcess:
-		return "Launch"
-	case types.PhaseInitializingSession:
-		return "Init"
-	case types.PhaseStreamingTurn:
-		return "Turn"
-	case types.PhaseFinishing:
-		return "Finish"
-	case types.PhaseSucceeded:
-		return "Done"
-	case types.PhaseFailed:
-		return "Failed"
-	case types.PhaseTimedOut:
-		return "Timeout"
-	case types.PhaseStalled:
-		return "Stalled"
+func compactStage(stage types.Stage) string {
+	switch stage {
+	case types.StagePlan:
+		return "Plan"
+	case types.StageExecute:
+		return "Exec"
+	case types.StageVerify:
+		return "Verify"
+	case types.StageHumanReview:
+		return "Review"
 	default:
-		return phase.String()
+		return stage.String()
 	}
 }
 
-func isActivePhase(phase types.RunPhase) bool {
-	switch phase {
-	case types.PhaseInitializingSession,
-		types.PhaseLaunchingAgentProcess,
-		types.PhasePreparingWorkspace,
-		types.PhaseBuildingPrompt,
-		types.PhaseStreamingTurn,
-		types.PhaseFinishing:
-		return true
-	default:
-		return false
-	}
+func isActiveStatus(status string) bool {
+	return status == "running"
 }

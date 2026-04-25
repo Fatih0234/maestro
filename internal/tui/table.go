@@ -14,7 +14,8 @@ import (
 type SessionRow struct {
 	IssueID   string
 	Title     string
-	Phase     types.RunPhase
+	Stage     types.Stage
+	Status    string
 	PID       int
 	Age       string
 	TokensIn  int64
@@ -103,24 +104,24 @@ func (t Table) View() string {
 		}
 		title = fmt.Sprintf("%-26s", title)
 
-		phaseStr := fmt.Sprintf("%-8s", compactPhase(row.Phase))
+		stageStr := fmt.Sprintf("%-8s", compactStage(row.Stage))
 
-		glyph := statusGlyph(row.Phase, t.spinner)
+		glyph := statusGlyph(row.Status, t.spinner)
 		if t.focused && i == t.selected {
 			glyph = "▶"
 		}
 
 		rowStr := fmt.Sprintf("%s %-8s %-26s %-8s %8d %-10s %s\n",
-			glyph, row.IssueID, title, phaseStr, row.PID, tokens, ageStr)
+			glyph, row.IssueID, title, stageStr, row.PID, tokens, ageStr)
 
 		// Apply coloring
 		if t.focused && i == t.selected {
 			rowStr = lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("238")).Render(rowStr)
-		} else if isActivePhase(row.Phase) {
+		} else if isActiveStatus(row.Status) {
 			rowStr = lipgloss.NewStyle().Bold(true).Render(rowStr)
-		} else if row.Phase == types.PhaseSucceeded {
+		} else if row.Status == "done" {
 			rowStr = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render(rowStr)
-		} else if row.Phase == types.PhaseFailed || row.Phase == types.PhaseTimedOut || row.Phase == types.PhaseStalled {
+		} else if row.Status == "failed" || row.Status == "timeout" || row.Status == "stalled" {
 			rowStr = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(rowStr)
 		}
 
@@ -136,23 +137,23 @@ func (t Table) View() string {
 	return result
 }
 
-// statusGlyph returns a status indicator based on phase.
-func statusGlyph(phase types.RunPhase, spinner string) string {
-	if isActivePhase(phase) {
+// statusGlyph returns a status indicator based on run status.
+func statusGlyph(status string, spinner string) string {
+	if isActiveStatus(status) {
 		if spinner != "" {
 			return spinner
 		}
 		return "●"
 	}
 
-	switch phase {
-	case types.PhaseSucceeded:
+	switch status {
+	case "done":
 		return "✓"
-	case types.PhaseFailed:
+	case "failed":
 		return "✗"
-	case types.PhaseTimedOut:
+	case "timeout":
 		return "⏱"
-	case types.PhaseStalled:
+	case "stalled":
 		return "⚠"
 	default:
 		return "○"

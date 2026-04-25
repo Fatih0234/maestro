@@ -59,6 +59,28 @@ func ExtractSessionID(event types.AgentEvent) string {
 	return sessionID
 }
 
+// ExtractTextContent extracts text content from an agent event.
+func ExtractTextContent(event types.AgentEvent) string {
+	payload, ok := event.Payload.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	// Try to extract text from various event structures
+	if part, ok := payload["part"].(map[string]interface{}); ok {
+		if text, ok := part["text"].(string); ok {
+			return text
+		}
+	}
+
+	// Try "text" field at top level
+	if text, ok := payload["text"].(string); ok {
+		return text
+	}
+
+	return ""
+}
+
 // ExtractTokens extracts token counts from a session.status event.
 func ExtractTokens(event types.AgentEvent) (tokensIn, tokensOut int64) {
 	payload, ok := event.Payload.(map[string]interface{})

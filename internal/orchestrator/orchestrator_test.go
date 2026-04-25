@@ -530,6 +530,7 @@ func TestOrchestrator_DispatchBackoff_ConsumesReadyEntryOnce(t *testing.T) {
 	entry.RetryAt = time.Now().Add(-time.Second)
 
 	orch.dispatchBackoff()
+	time.Sleep(50 * time.Millisecond) // allow goroutine to start agent
 	if got := runner.StartCalls; got != 1 {
 		t.Fatalf("StartCalls after first dispatch = %d, want 1", got)
 	}
@@ -724,7 +725,7 @@ func TestOrchestrator_StartRun_WorkspaceError(t *testing.T) {
 	events := NewEventCollector(orch.Events)
 
 	orch.poll()
-	time.Sleep(10 * time.Millisecond) // Allow events to be collected
+	time.Sleep(50 * time.Millisecond) // Allow async goroutine to emit events
 
 	// Issue should be claimed even though workspace fails
 	if tracker.ClaimCount("CB-1") != 1 {
@@ -750,7 +751,7 @@ func TestOrchestrator_StartRun_AgentError(t *testing.T) {
 	events := NewEventCollector(orch.Events)
 
 	orch.poll()
-	time.Sleep(10 * time.Millisecond) // Allow events to be collected
+	time.Sleep(50 * time.Millisecond) // Allow async goroutine to emit events
 
 	// Should have some form of failure event
 	hasFailure := events.Has(EventIssueRetrying) || events.Has(EventAgentFinished)

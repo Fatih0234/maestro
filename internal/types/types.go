@@ -81,16 +81,16 @@ func (p RunPhase) String() string {
 // Issue represents a task to be processed by an agent.
 
 type Issue struct {
-	ID          string     // Unique identifier (e.g., "CB-1")
-	Identifier  string     // Display identifier (e.g., "CB-1")
-	Title       string     // Brief description
-	Description string     // Full details
-	State       IssueState // Current state
-	Labels      []string   // Tags for categorization
-	URL         string     // Link to the issue (empty for local tracker)
-	RetryAfter  *time.Time // When to retry (for retry_queued state)
-	CreatedAt   time.Time  // When issue was created
-	UpdatedAt   time.Time  // Last modification
+	ID          string     `json:"id"`                    // Unique identifier (e.g., "CB-1")
+	Identifier  string     `json:"identifier,omitempty"`  // Display identifier (e.g., "CB-1")
+	Title       string     `json:"title"`                 // Brief description
+	Description string     `json:"description"`           // Full details
+	State       IssueState `json:"state"`                 // Current state
+	Labels      []string   `json:"labels,omitempty"`      // Tags for categorization
+	URL         string     `json:"url,omitempty"`         // Link to the issue (empty for local tracker)
+	RetryAfter  *time.Time `json:"retry_after,omitempty"` // When to retry (for retry_queued state)
+	CreatedAt   time.Time  `json:"created_at"`            // When issue was created
+	UpdatedAt   time.Time  `json:"updated_at"`            // Last modification
 }
 
 // RunAttempt tracks an active or completed run for an issue.

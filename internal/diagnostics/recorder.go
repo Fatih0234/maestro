@@ -81,6 +81,8 @@ type AttemptRecorder struct {
 	eventsPath    string
 	stdoutPath    string
 	stderrPath    string
+	stagesDir     string
+	reviewDir     string
 	preflightDir  string
 	postflightDir string
 
@@ -88,54 +90,61 @@ type AttemptRecorder struct {
 	stderrFile *os.File
 	eventsFile *os.File
 
-	meta AttemptMeta
-	mu   sync.Mutex
+	issueRun *IssueRun
+	stages   map[types.Stage]*StageRecorder
+	meta     AttemptMeta
+	mu       sync.Mutex
 }
 
 // IssueSummary is the compact issue-level summary written to summary.json.
 type IssueSummary struct {
-	IssueID        string     `json:"issue_id"`
-	Title          string     `json:"title"`
-	Description    string     `json:"description,omitempty"`
-	Labels         []string   `json:"labels,omitempty"`
-	IssueState     string     `json:"issue_state,omitempty"`
-	RunDir         string     `json:"run_dir"`
-	IssueDir       string     `json:"issue_dir"`
-	Attempts       int        `json:"attempts"`
-	CurrentAttempt int        `json:"current_attempt,omitempty"`
-	Outcome        string     `json:"outcome,omitempty"`
-	Branch         string     `json:"branch,omitempty"`
-	WorkspacePath  string     `json:"workspace_path,omitempty"`
-	StartCommit    string     `json:"start_commit,omitempty"`
-	FinalCommit    string     `json:"final_commit,omitempty"`
-	StartedAt      time.Time  `json:"started_at"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-	LastError      string     `json:"last_error,omitempty"`
+	IssueID        string            `json:"issue_id"`
+	Title          string            `json:"title"`
+	Description    string            `json:"description,omitempty"`
+	Labels         []string          `json:"labels,omitempty"`
+	IssueState     string            `json:"issue_state,omitempty"`
+	RunDir         string            `json:"run_dir"`
+	IssueDir       string            `json:"issue_dir"`
+	Attempts       int               `json:"attempts"`
+	CurrentAttempt int               `json:"current_attempt,omitempty"`
+	CurrentStage   types.Stage       `json:"current_stage"`
+	ReviewState    types.ReviewState `json:"review_state"`
+	Outcome        string            `json:"outcome,omitempty"`
+	Branch         string            `json:"branch,omitempty"`
+	WorkspacePath  string            `json:"workspace_path,omitempty"`
+	StartCommit    string            `json:"start_commit,omitempty"`
+	FinalCommit    string            `json:"final_commit,omitempty"`
+	StartedAt      time.Time         `json:"started_at"`
+	FinishedAt     *time.Time        `json:"finished_at,omitempty"`
+	ReviewedAt     *time.Time        `json:"reviewed_at,omitempty"`
+	ReviewedBy     string            `json:"reviewed_by,omitempty"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+	LastError      string            `json:"last_error,omitempty"`
 }
 
 // AttemptMeta is the attempt-level metadata written to meta.json.
 type AttemptMeta struct {
-	IssueID       string     `json:"issue_id"`
-	IssueTitle    string     `json:"issue_title,omitempty"`
-	Attempt       int        `json:"attempt"`
-	Outcome       string     `json:"outcome,omitempty"`
-	Branch        string     `json:"branch,omitempty"`
-	WorkspacePath string     `json:"workspace_path,omitempty"`
-	StartedAt     time.Time  `json:"started_at"`
-	EndedAt       *time.Time `json:"ended_at,omitempty"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	PID           int        `json:"pid,omitempty"`
-	SessionID     string     `json:"session_id,omitempty"`
-	ServerURL     string     `json:"server_url,omitempty"`
-	StartCommit   string     `json:"start_commit,omitempty"`
-	FinalCommit   string     `json:"final_commit,omitempty"`
-	Error         string     `json:"error,omitempty"`
-	RetryAt       *time.Time `json:"retry_at,omitempty"`
-	PromptPath    string     `json:"prompt_path,omitempty"`
-	EventsPath    string     `json:"events_path,omitempty"`
-	StdoutPath    string     `json:"stdout_path,omitempty"`
-	StderrPath    string     `json:"stderr_path,omitempty"`
+	IssueID       string      `json:"issue_id"`
+	IssueTitle    string      `json:"issue_title,omitempty"`
+	Attempt       int         `json:"attempt"`
+	CurrentStage  types.Stage `json:"current_stage"`
+	Outcome       string      `json:"outcome,omitempty"`
+	Branch        string      `json:"branch,omitempty"`
+	WorkspacePath string      `json:"workspace_path,omitempty"`
+	StartedAt     time.Time   `json:"started_at"`
+	EndedAt       *time.Time  `json:"ended_at,omitempty"`
+	UpdatedAt     time.Time   `json:"updated_at"`
+	PID           int         `json:"pid,omitempty"`
+	SessionID     string      `json:"session_id,omitempty"`
+	ServerURL     string      `json:"server_url,omitempty"`
+	StartCommit   string      `json:"start_commit,omitempty"`
+	FinalCommit   string      `json:"final_commit,omitempty"`
+	Error         string      `json:"error,omitempty"`
+	RetryAt       *time.Time  `json:"retry_at,omitempty"`
+	PromptPath    string      `json:"prompt_path,omitempty"`
+	EventsPath    string      `json:"events_path,omitempty"`
+	StdoutPath    string      `json:"stdout_path,omitempty"`
+	StderrPath    string      `json:"stderr_path,omitempty"`
 }
 
 // NewRecorder creates a recorder rooted at <board-dir-parent>/runs.
@@ -246,9 +255,23 @@ func (r *Recorder) UpdateAttemptStartCommit(issueID string, attempt int, commit 
 	if err != nil {
 		return err
 	}
-	return ar.updateMeta(func(meta *AttemptMeta) {
+	if err := ar.updateMeta(func(meta *AttemptMeta) {
 		meta.StartCommit = commit
-	})
+	}); err != nil {
+		return err
+	}
+
+	ir, err := r.getIssueRun(issueID)
+	if err != nil {
+		return err
+	}
+	ir.mu.Lock()
+	ir.summary.StartCommit = commit
+	ir.summary.UpdatedAt = time.Now().UTC()
+	summary := ir.summary
+	ir.mu.Unlock()
+
+	return writeJSONAtomic(ir.summaryPath, summary)
 }
 
 // UpdateAttemptLaunchInfo records the PID/session/server URL once the agent starts.
@@ -333,6 +356,7 @@ func (r *Recorder) FinalizeAttempt(
 		ar.meta.Error = runErr.Error()
 	} else {
 		ar.meta.Error = ""
+		ar.meta.CurrentStage = types.StageHumanReview
 	}
 	ar.meta.RetryAt = retryAt
 	ar.meta.EndedAt = &now
@@ -354,6 +378,9 @@ func (r *Recorder) FinalizeAttempt(
 	ir.mu.Lock()
 	ir.summary.Attempts = max(ir.summary.Attempts, attempt)
 	ir.summary.CurrentAttempt = attempt
+	if ir.summary.StartCommit == "" {
+		ir.summary.StartCommit = meta.StartCommit
+	}
 	ir.summary.Outcome = outcome
 	ir.summary.FinalCommit = finalCommit
 	ir.summary.WorkspacePath = meta.WorkspacePath
@@ -361,22 +388,16 @@ func (r *Recorder) FinalizeAttempt(
 	ir.summary.UpdatedAt = now
 	ir.summary.LastError = meta.Error
 	if runErr == nil {
-		switch outcome {
-		case "succeeded", "done":
-			finishedAt := now
-			ir.summary.FinishedAt = &finishedAt
-			ir.summary.IssueState = types.StateReleased.String()
-		case "awaiting_review", "ready_for_review":
-			finishedAt := now
-			ir.summary.FinishedAt = &finishedAt
-			ir.summary.IssueState = types.StateInReview.String()
-		default:
-			ir.summary.FinishedAt = nil
-			ir.summary.IssueState = outcome
-		}
+		finishedAt := now
+		ir.summary.FinishedAt = &finishedAt
+		ir.summary.CurrentStage = types.StageHumanReview
+		ir.summary.ReviewState = types.ReviewStateReady
+		ir.summary.ReviewedAt = nil
+		ir.summary.ReviewedBy = ""
+		ir.summary.IssueState = types.StateInReview.BoardState()
 	} else {
 		ir.summary.FinishedAt = nil
-		ir.summary.IssueState = types.StateRetryQueued.String()
+		ir.summary.IssueState = types.StateRetryQueued.BoardState()
 	}
 	summary := ir.summary
 	ir.mu.Unlock()
@@ -479,6 +500,16 @@ func (ir *IssueRun) refreshIssue(issue types.Issue) error {
 
 	now := time.Now().UTC()
 	ir.mu.Lock()
+	if ir.summary.IssueID == "" {
+		var stored IssueSummary
+		if err := readJSONFile(ir.summaryPath, &stored); err != nil && !errors.Is(err, os.ErrNotExist) {
+			ir.mu.Unlock()
+			return err
+		}
+		if stored.IssueID != "" {
+			ir.summary = stored
+		}
+	}
 	if ir.summary.StartedAt.IsZero() {
 		ir.summary.StartedAt = now
 	}
@@ -487,13 +518,20 @@ func (ir *IssueRun) refreshIssue(issue types.Issue) error {
 	ir.summary.Title = issue.Title
 	ir.summary.Description = issue.Description
 	ir.summary.Labels = cloneStrings(issue.Labels)
-	ir.summary.IssueState = issue.State.String()
+	ir.summary.IssueState = issue.State.BoardState()
 	ir.summary.RunDir = ir.issueDir
 	ir.summary.IssueDir = ir.issueDir
-	ir.summary.UpdatedAt = now
-	if ir.summary.Outcome == "" {
-		ir.summary.Outcome = issue.State.String()
+	if ir.summary.ReviewState == "" {
+		ir.summary.ReviewState = types.ReviewStatePending
 	}
+	if ir.summary.CurrentStage == "" && ir.summary.CurrentAttempt == 0 && ir.summary.Attempts == 0 && ir.summary.Outcome == "" {
+		ir.summary.CurrentStage = types.StagePlan
+		ir.summary.Outcome = issue.State.BoardState()
+	}
+	if ir.summary.Outcome == "" {
+		ir.summary.Outcome = issue.State.BoardState()
+	}
+	ir.summary.UpdatedAt = now
 	summary := ir.summary
 	ir.mu.Unlock()
 
@@ -522,11 +560,19 @@ func (ir *IssueRun) beginAttempt(
 	attemptDir := filepath.Join(ir.attemptsDir, fmt.Sprintf("%03d", attempt))
 	preflightDir := filepath.Join(attemptDir, "preflight")
 	postflightDir := filepath.Join(attemptDir, "postflight")
+	stagesDir := filepath.Join(attemptDir, "stages")
+	reviewDir := filepath.Join(attemptDir, "review")
 	if err := os.MkdirAll(preflightDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create preflight dir: %w", err)
 	}
 	if err := os.MkdirAll(postflightDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create postflight dir: %w", err)
+	}
+	if err := os.MkdirAll(stagesDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create stages dir: %w", err)
+	}
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create review dir: %w", err)
 	}
 
 	stdoutPath := filepath.Join(attemptDir, "stdout.log")
@@ -556,6 +602,7 @@ func (ir *IssueRun) beginAttempt(
 		IssueID:       issue.ID,
 		IssueTitle:    issue.Title,
 		Attempt:       attempt,
+		CurrentStage:  types.StagePlan,
 		Outcome:       "running",
 		Branch:        branch,
 		WorkspacePath: workspacePath,
@@ -576,11 +623,15 @@ func (ir *IssueRun) beginAttempt(
 		eventsPath:    eventsPath,
 		stdoutPath:    stdoutPath,
 		stderrPath:    stderrPath,
+		stagesDir:     stagesDir,
+		reviewDir:     reviewDir,
 		preflightDir:  preflightDir,
 		postflightDir: postflightDir,
 		stdoutFile:    stdoutFile,
 		stderrFile:    stderrFile,
 		eventsFile:    eventsFile,
+		issueRun:      ir,
+		stages:        make(map[types.Stage]*StageRecorder),
 		meta:          meta,
 	}
 
@@ -606,9 +657,17 @@ func (ir *IssueRun) beginAttempt(
 	ir.currentAttempt = attempt
 	ir.summary.Attempts = max(ir.summary.Attempts, attempt)
 	ir.summary.CurrentAttempt = attempt
+	ir.summary.CurrentStage = types.StagePlan
+	ir.summary.ReviewState = types.ReviewStatePending
 	ir.summary.Outcome = "running"
 	ir.summary.Branch = branch
 	ir.summary.WorkspacePath = workspacePath
+	ir.summary.StartCommit = ""
+	ir.summary.FinalCommit = ""
+	ir.summary.FinishedAt = nil
+	ir.summary.ReviewedAt = nil
+	ir.summary.ReviewedBy = ""
+	ir.summary.LastError = ""
 	ir.summary.UpdatedAt = now
 	ir.mu.Unlock()
 
@@ -653,9 +712,23 @@ func (ar *AttemptRecorder) AppendEvent(event types.OrchestratorEvent) error {
 }
 
 func (ar *AttemptRecorder) SetStartCommit(commit string) error {
-	return ar.updateMeta(func(meta *AttemptMeta) {
+	if ar == nil {
+		return nil
+	}
+	if err := ar.updateMeta(func(meta *AttemptMeta) {
 		meta.StartCommit = commit
-	})
+	}); err != nil {
+		return err
+	}
+	if ar.issueRun == nil {
+		return nil
+	}
+	ar.issueRun.mu.Lock()
+	ar.issueRun.summary.StartCommit = commit
+	ar.issueRun.summary.UpdatedAt = time.Now().UTC()
+	summary := ar.issueRun.summary
+	ar.issueRun.mu.Unlock()
+	return writeJSONAtomic(ar.issueRun.summaryPath, summary)
 }
 
 func (ar *AttemptRecorder) SetLaunchInfo(pid int, sessionID, serverURL string) error {
@@ -699,6 +772,22 @@ func (ar *AttemptRecorder) close() error {
 		return nil
 	}
 	var errs []error
+	ar.mu.Lock()
+	stages := make([]*StageRecorder, 0, len(ar.stages))
+	for _, stage := range ar.stages {
+		stages = append(stages, stage)
+	}
+	ar.mu.Unlock()
+
+	for _, stage := range stages {
+		if stage == nil {
+			continue
+		}
+		if err := stage.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	if ar.stdoutFile != nil {
 		if err := ar.stdoutFile.Close(); err != nil {
 			errs = append(errs, err)

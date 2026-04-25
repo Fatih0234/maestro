@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/contrabass-pi/internal/util"
 )
 
 // WorkspaceManager interface defines the operations needed by the orchestrator.
@@ -20,6 +21,8 @@ type WorkspaceManager interface {
 	Create(ctx context.Context, issue types.Issue) (string, error)
 	Cleanup(ctx context.Context, issueID string) error
 	MergeToMain(ctx context.Context, issueID string) error
+	Path(issueID string) string
+	BaseDir() string
 }
 
 // Default paths
@@ -111,7 +114,7 @@ func (m *Manager) Create(ctx context.Context, issue types.Issue) (string, error)
 	}
 
 	// Create git worktree
-	branchName := m.branchPrefix + sanitizeBranchName(issue.ID)
+	branchName := m.branchPrefix + util.SanitizeBranchName(issue.ID)
 	output, err := m.runGit(ctx, "worktree", "add", workspacePath, "-b", branchName)
 	if err != nil {
 		// If the branch already exists, reuse it instead of falling back to an
@@ -213,7 +216,7 @@ func (m *Manager) MergeToMain(ctx context.Context, issueID string) error {
 	unlock := m.lockIssue(issueID)
 	defer unlock()
 
-	branchName := m.branchPrefix + sanitizeBranchName(issueID)
+	branchName := m.branchPrefix + util.SanitizeBranchName(issueID)
 
 	// 1. Verify worktree exists
 	wsPath := m.workspacePath(issueID)
@@ -298,39 +301,9 @@ func (m *Manager) BaseDir() string {
 	return m.baseDir
 }
 
-// sanitizeBranchName sanitizes an issue ID for use in a git branch name.
-// Only allows [a-zA-Z0-9_/-], replacing all other characters with hyphens.
-func sanitizeBranchName(id string) string {
-	var result strings.Builder
-	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') || r == '_' || r == '/' || r == '-' {
-			result.WriteRune(r)
-		} else {
-			result.WriteRune('-')
-		}
-	}
-	return result.String()
-}
-
-// sanitizeFileName sanitizes a string for use in a file or directory name.
-// Only allows [a-zA-Z0-9_.-], replacing all other characters with hyphens.
-func sanitizeFileName(name string) string {
-	var result strings.Builder
-	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') || r == '_' || r == '.' || r == '-' {
-			result.WriteRune(r)
-		} else {
-			result.WriteRune('-')
-		}
-	}
-	return result.String()
-}
-
 // workspacePath returns the full path to a workspace directory.
 func (m *Manager) workspacePath(issueID string) string {
-	return filepath.Join(m.worktreeRoot(), sanitizeFileName(issueID))
+	return filepath.Join(m.worktreeRoot(), util.SanitizeFileName(issueID))
 }
 
 // worktreeRoot returns the base directory where worktrees live.

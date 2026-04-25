@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/contrabass-pi/internal/util"
 )
 
 func initGitRepo(t *testing.T, dir string) {
@@ -456,9 +457,9 @@ func TestSanitizeBranchName(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {
-			result := sanitizeBranchName(tc.input)
+			result := util.SanitizeBranchName(tc.input)
 			if result != tc.expected {
-				t.Errorf("sanitizeBranchName(%q) = %q, want %q", tc.input, result, tc.expected)
+				t.Errorf("SanitizeBranchName(%q) = %q, want %q", tc.input, result, tc.expected)
 			}
 		})
 	}
@@ -480,9 +481,9 @@ func TestSanitizeFileName(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {
-			result := sanitizeFileName(tc.input)
+			result := util.SanitizeFileName(tc.input)
 			if result != tc.expected {
-				t.Errorf("sanitizeFileName(%q) = %q, want %q", tc.input, result, tc.expected)
+				t.Errorf("SanitizeFileName(%q) = %q, want %q", tc.input, result, tc.expected)
 			}
 		})
 	}
