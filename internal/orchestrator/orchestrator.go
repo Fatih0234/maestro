@@ -184,9 +184,12 @@ func (o *Orchestrator) handleTimeout(run *RunState, elapsed time.Duration) {
 	o.finalizeAttempt(issueID, run.Attempt, "timed_out", &entry.RetryAt, fmt.Errorf("timeout after %v", elapsed))
 
 	o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
-		IssueID: issueID,
-		Attempt: attempt,
-		RetryAt: entry.RetryAt,
+		IssueID:     issueID,
+		Attempt:     attempt,
+		Stage:       run.Stage,
+		RetryAt:     entry.RetryAt,
+		Error:       fmt.Sprintf("timeout after %v", elapsed),
+		FailureKind: types.StageFailureTimeout,
 	})
 
 	// Update phase to timed out
@@ -223,9 +226,12 @@ func (o *Orchestrator) handleStall(run *RunState, lastEventAge time.Duration) {
 	o.finalizeAttempt(issueID, run.Attempt, "stalled", &entry.RetryAt, fmt.Errorf("stall: no event for %v", lastEventAge))
 
 	o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
-		IssueID: issueID,
-		Attempt: attempt,
-		RetryAt: entry.RetryAt,
+		IssueID:     issueID,
+		Attempt:     attempt,
+		Stage:       run.Stage,
+		RetryAt:     entry.RetryAt,
+		Error:       fmt.Sprintf("stall: no event for %v", lastEventAge),
+		FailureKind: types.StageFailureTimeout,
 	})
 
 	// Update phase to stalled
@@ -559,9 +565,12 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 					Error:   err.Error(),
 				})
 				o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
-					IssueID: issueID,
-					Attempt: nextAttempt,
-					RetryAt: entry.RetryAt,
+					IssueID:     issueID,
+					Attempt:     nextAttempt,
+					Stage:       stage,
+					RetryAt:     entry.RetryAt,
+					Error:       fmt.Sprintf("stage %s failed: %v", stage, err),
+					FailureKind: o.classifyStageFailure(err, stage),
 				})
 				return
 			}
@@ -595,9 +604,12 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 					Error:   errMsg,
 				})
 				o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
-					IssueID: issueID,
-					Attempt: nextAttempt,
-					RetryAt: entry.RetryAt,
+					IssueID:     issueID,
+					Attempt:     nextAttempt,
+					Stage:       stage,
+					RetryAt:     entry.RetryAt,
+					Error:       errMsg,
+					FailureKind: failureKind,
 				})
 				return
 			}
@@ -646,9 +658,12 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				Error:   err.Error(),
 			})
 			o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
-				IssueID: issueID,
-				Attempt: nextAttempt,
-				RetryAt: entry.RetryAt,
+				IssueID:     issueID,
+				Attempt:     nextAttempt,
+				Stage:       types.StagePlan,
+				RetryAt:     entry.RetryAt,
+				Error:       fmt.Sprintf("review handoff failed: %v", err),
+				FailureKind: o.classifyStageFailure(err, types.StagePlan),
 			})
 			return
 		}
@@ -665,6 +680,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 		})
 		o.emit(EventIssueReadyForReview, issueID, IssueReadyForReviewPayload{
 			IssueID:       issueID,
+			Title:         issue.Title,
 			Branch:        handoffBranch,
 			WorkspacePath: handoffWorkspace,
 		})
@@ -711,9 +727,12 @@ func (o *Orchestrator) handleStartError(issue types.Issue, attempt int, startSta
 		Error:   err.Error(),
 	})
 	o.emit(EventIssueRetrying, issue.ID, IssueRetryingPayload{
-		IssueID: issue.ID,
-		Attempt: attempt,
-		RetryAt: entry.RetryAt,
+		IssueID:     issue.ID,
+		Attempt:     attempt,
+		Stage:       startStage,
+		RetryAt:     entry.RetryAt,
+		Error:       fmt.Sprintf("%s: %v", reason, err),
+		FailureKind: o.classifyStageFailure(err, startStage),
 	})
 }
 

@@ -44,9 +44,6 @@ type Model struct {
 	maxLogSize int
 	scrollPos  int
 
-	// Selection state
-	reviewSelected int
-
 	// State
 	quitting bool
 }
