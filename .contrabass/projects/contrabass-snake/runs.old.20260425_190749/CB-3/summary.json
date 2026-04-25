@@ -1,0 +1,20 @@
+{
+  "issue_id": "CB-3",
+  "title": "Show a game over message",
+  "description": "When the snake dies, display a centered 'Game Over' message on the canvas. Keep the existing controls and gameplay behavior unchanged.",
+  "labels": [
+    "smoke-test"
+  ],
+  "issue_state": "in_review",
+  "run_dir": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-3",
+  "issue_dir": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-3",
+  "attempts": 1,
+  "current_attempt": 1,
+  "outcome": "awaiting_review",
+  "branch": "contrabass/CB-3",
+  "workspace_path": "/Volumes/T7/projects/contrabass-snake.worktrees/CB-3",
+  "final_commit": "43510b062f06d7ac3a959434a3438d2adf41fafe",
+  "started_at": "2026-04-22T21:52:54.279297Z",
+  "finished_at": "2026-04-22T21:53:34.376781Z",
+  "updated_at": "2026-04-22T21:53:34.376781Z"
+}

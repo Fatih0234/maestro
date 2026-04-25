@@ -1,0 +1,20 @@
+{
+  "issue_id": "CB-1",
+  "issue_title": "Add score display",
+  "attempt": 1,
+  "outcome": "awaiting_review",
+  "branch": "contrabass/CB-1",
+  "workspace_path": "/Volumes/T7/projects/contrabass-snake.worktrees/CB-1",
+  "started_at": "2026-04-22T21:12:01.464075Z",
+  "ended_at": "2026-04-22T21:12:21.178759Z",
+  "updated_at": "2026-04-22T21:12:21.178759Z",
+  "pid": 41906,
+  "session_id": "ses_248f6dd80ffercgQMRS5ihSVhJ",
+  "server_url": "http://127.0.0.1:49530",
+  "start_commit": "43510b062f06d7ac3a959434a3438d2adf41fafe",
+  "final_commit": "43510b062f06d7ac3a959434a3438d2adf41fafe",
+  "prompt_path": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-1/attempts/001/prompt.md",
+  "events_path": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-1/attempts/001/events.jsonl",
+  "stdout_path": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-1/attempts/001/stdout.log",
+  "stderr_path": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-1/attempts/001/stderr.log"
+}

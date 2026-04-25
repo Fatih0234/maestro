@@ -6,7 +6,7 @@ agent_timeout_ms: 300000
 stall_timeout_ms: 120000
 tracker:
   type: internal
-  board_dir: .contrabass/board
+  board_dir: /Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/board
   issue_prefix: CB
 agent:
   type: opencode
@@ -16,7 +16,7 @@ opencode:
   profile: contrabass
   agent: build
 workspace:
-  base_dir: .
+  base_dir: /Volumes/T7/projects/contrabass-snake
   branch_prefix: contrabass/
 ---
 

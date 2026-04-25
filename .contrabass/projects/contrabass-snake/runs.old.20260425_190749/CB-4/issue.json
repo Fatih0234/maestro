@@ -1,0 +1,14 @@
+{
+  "ID": "CB-4",
+  "Identifier": "CB-4",
+  "Title": "Add pause and resume controls",
+  "Description": "When the player presses P, pause the snake game and freeze movement. While paused, render a centered 'Paused' message on the canvas. Press P again to resume. Keep the existing controls, score display, restart hint, and game-over behavior unchanged.",
+  "State": 2,
+  "Labels": [
+    "feature"
+  ],
+  "URL": "local://CB-4",
+  "RetryAfter": null,
+  "CreatedAt": "2026-04-22T22:30:26Z",
+  "UpdatedAt": "2026-04-22T22:42:39.568139Z"
+}

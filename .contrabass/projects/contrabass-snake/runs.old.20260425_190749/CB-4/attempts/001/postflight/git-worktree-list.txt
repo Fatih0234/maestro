@@ -1,0 +1,5 @@
+/Volumes/T7/projects/contrabass-snake                 43510b0 [main]
+/Volumes/T7/projects/contrabass-snake.worktrees/CB-1  43510b0 [contrabass/CB-1]
+/Volumes/T7/projects/contrabass-snake.worktrees/CB-2  43510b0 [contrabass/CB-2]
+/Volumes/T7/projects/contrabass-snake.worktrees/CB-3  43510b0 [contrabass/CB-3]
+/Volumes/T7/projects/contrabass-snake.worktrees/CB-4  43510b0 [contrabass/CB-4]

@@ -1,0 +1,20 @@
+{
+  "issue_id": "CB-4",
+  "issue_title": "Add pause and resume controls",
+  "attempt": 1,
+  "outcome": "awaiting_review",
+  "branch": "contrabass/CB-4",
+  "workspace_path": "/Volumes/T7/projects/contrabass-snake.worktrees/CB-4",
+  "started_at": "2026-04-22T22:42:39.589354Z",
+  "ended_at": "2026-04-22T22:43:06.54626Z",
+  "updated_at": "2026-04-22T22:43:06.54626Z",
+  "pid": 6158,
+  "session_id": "ses_248a3e2b4ffe1Ijjt2IwSlqaBE",
+  "server_url": "http://127.0.0.1:51683",
+  "start_commit": "43510b062f06d7ac3a959434a3438d2adf41fafe",
+  "final_commit": "43510b062f06d7ac3a959434a3438d2adf41fafe",
+  "prompt_path": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-4/attempts/001/prompt.md",
+  "events_path": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-4/attempts/001/events.jsonl",
+  "stdout_path": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-4/attempts/001/stdout.log",
+  "stderr_path": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-4/attempts/001/stderr.log"
+}

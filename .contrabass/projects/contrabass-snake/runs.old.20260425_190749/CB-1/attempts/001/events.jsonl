@@ -1,0 +1,5 @@
+{"Type":"workspace.created","IssueID":"CB-1","Timestamp":"2026-04-22T21:12:01.501224Z","Payload":{"IssueID":"CB-1","Path":"/Volumes/T7/projects/contrabass-snake.worktrees/CB-1"}}
+{"Type":"prompt.built","IssueID":"CB-1","Timestamp":"2026-04-22T21:12:01.501263Z","Payload":{"IssueID":"CB-1","Length":668}}
+{"Type":"agent.started","IssueID":"CB-1","Timestamp":"2026-04-22T21:12:02.615936Z","Payload":{"IssueID":"CB-1","PID":41906,"SessionID":"ses_248f6dd80ffercgQMRS5ihSVhJ"}}
+{"Type":"agent.finished","IssueID":"CB-1","Timestamp":"2026-04-22T21:12:21.179326Z","Payload":{"IssueID":"CB-1","Success":true,"Error":""}}
+{"Type":"issue.ready_for_review","IssueID":"CB-1","Timestamp":"2026-04-22T21:12:21.179538Z","Payload":{"IssueID":"CB-1","Branch":"contrabass/CB-1","WorkspacePath":"/Volumes/T7/projects/contrabass-snake.worktrees/CB-1"}}

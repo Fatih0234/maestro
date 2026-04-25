@@ -1,0 +1,14 @@
+{
+  "ID": "CB-3",
+  "Identifier": "CB-3",
+  "Title": "Show a game over message",
+  "Description": "When the snake dies, display a centered 'Game Over' message on the canvas. Keep the existing controls and gameplay behavior unchanged.",
+  "State": 2,
+  "Labels": [
+    "smoke-test"
+  ],
+  "URL": "local://CB-3",
+  "RetryAfter": null,
+  "CreatedAt": "2026-04-22T21:44:54Z",
+  "UpdatedAt": "2026-04-22T21:52:54.278842Z"
+}

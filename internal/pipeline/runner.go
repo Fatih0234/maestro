@@ -194,6 +194,15 @@ monitor:
 	finalCommit := r.captureCommit(ctx, workspacePath)
 	diff := r.captureDiff(ctx, workspacePath)
 
+	// 6b. Programmatic commit — if the agent made changes but didn't commit,
+	// the system commits them so the branch actually contains the work.
+	if runErr == nil && r.hasUncommittedChanges(workspacePath) {
+		committedHash, commitErr := r.stageCommit(workspacePath, issue)
+		if commitErr == nil && committedHash != "" {
+			finalCommit = committedHash
+		}
+	}
+
 	// 7. Finalize stage recording
 	if stageRecorder != nil {
 		var result types.StageResult
@@ -354,4 +363,44 @@ func (r *Runner) gitOutput(ctx context.Context, dir string, args ...string) stri
 		return "error: " + err.Error()
 	}
 	return text
+}
+
+// hasUncommittedChanges reports whether the git worktree has unstaged or
+// staged changes that haven't been committed yet.
+func (r *Runner) hasUncommittedChanges(dir string) bool {
+	if strings.TrimSpace(dir) == "" {
+		return false
+	}
+	// --porcelain gives machine-readable output; empty means clean.
+	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(out))) > 0
+}
+
+// stageCommit stages all changes in the worktree and creates a commit.
+// It returns the new commit hash or an error.
+func (r *Runner) stageCommit(dir string, issue types.Issue) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", errors.New("workspace path is empty")
+	}
+
+	// Stage everything.
+	if out, err := exec.Command("git", "-C", dir, "add", ".").CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git add failed: %w; output: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// Commit.
+	msg := fmt.Sprintf("feat(%s): %s", issue.ID, issue.Title)
+	if out, err := exec.Command("git", "-C", dir, "commit", "-m", msg).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git commit failed: %w; output: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// Return the new HEAD.
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse failed: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }

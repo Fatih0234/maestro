@@ -1,0 +1,20 @@
+{
+  "issue_id": "CB-4",
+  "title": "Add pause and resume controls",
+  "description": "When the player presses P, pause the snake game and freeze movement. While paused, render a centered 'Paused' message on the canvas. Press P again to resume. Keep the existing controls, score display, restart hint, and game-over behavior unchanged.",
+  "labels": [
+    "feature"
+  ],
+  "issue_state": "in_review",
+  "run_dir": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-4",
+  "issue_dir": "/Volumes/T7/projects/contrabass-pi/.contrabass/projects/contrabass-snake/runs/CB-4",
+  "attempts": 1,
+  "current_attempt": 1,
+  "outcome": "awaiting_review",
+  "branch": "contrabass/CB-4",
+  "workspace_path": "/Volumes/T7/projects/contrabass-snake.worktrees/CB-4",
+  "final_commit": "43510b062f06d7ac3a959434a3438d2adf41fafe",
+  "started_at": "2026-04-22T22:42:39.568507Z",
+  "finished_at": "2026-04-22T22:43:06.54626Z",
+  "updated_at": "2026-04-22T22:43:06.54626Z"
+}
