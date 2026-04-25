@@ -248,17 +248,23 @@ func (t *GitHubTracker) SetRetryQueue(id string, retryAt time.Time) (types.Issue
 		return types.Issue{}, fmt.Errorf("getting issue %s after retry queue: %w", id, err)
 	}
 
-	return t.toTypesIssue(gi, types.StateRetryQueued), nil
+	issue := t.toTypesIssue(gi, types.StateRetryQueued)
+	issue.RetryAfter = &retryAt
+	return issue, nil
 }
 
 // --- State-specific update helpers ---
 
 func (t *GitHubTracker) updateToUnclaimed(num int) (types.Issue, error) {
+	labels, err := t.filterLabels(num, nil)
+	if err != nil {
+		return types.Issue{}, fmt.Errorf("filtering labels for issue #%d: %w", num, err)
+	}
 	var updated githubIssue
 	body := map[string]interface{}{
 		"assignees": []string{},
 		"state":     "open",
-		"labels":    t.filterLabels(num, nil),
+		"labels":    labels,
 	}
 	if err := t.patch(fmt.Sprintf("/issues/%d", num), body, &updated); err != nil {
 		return types.Issue{}, err
@@ -335,10 +341,10 @@ func (t *GitHubTracker) reviewLabel() string {
 }
 
 // filterLabels returns the current labels for an issue minus any contrabass-managed labels.
-func (t *GitHubTracker) filterLabels(num int, extra []string) []string {
+func (t *GitHubTracker) filterLabels(num int, extra []string) ([]string, error) {
 	var gi githubIssue
 	if err := t.get(fmt.Sprintf("/issues/%d", num), &gi); err != nil {
-		return extra
+		return nil, err
 	}
 
 	managed := map[string]bool{
@@ -352,7 +358,7 @@ func (t *GitHubTracker) filterLabels(num int, extra []string) []string {
 			filtered = append(filtered, l.Name)
 		}
 	}
-	return append(filtered, extra...)
+	return append(filtered, extra...), nil
 }
 
 // --- Retry time parsing ---
@@ -452,6 +458,33 @@ func parseIssueNumber(id string) (int, error) {
 
 // --- HTTP helpers ---
 
+// githubAPIError carries the HTTP status code and body for failed GitHub API calls.
+type githubAPIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *githubAPIError) Error() string {
+	return fmt.Sprintf("github API error %d: %s", e.StatusCode, e.Body)
+}
+
+// isRetryable reports whether an error from do() warrants a retry.
+// Client errors (4xx) are not retried except 429 (Too Many Requests).
+// Server errors (5xx) and network errors are retried.
+func isRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	apiErr, ok := err.(*githubAPIError)
+	if !ok {
+		return true // network or other non-HTTP error
+	}
+	if apiErr.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	return apiErr.StatusCode >= 500
+}
+
 func (t *GitHubTracker) get(path string, out interface{}) error {
 	url := githubAPIBase + "/repos/" + t.owner + "/" + t.repo + path
 
@@ -469,12 +502,20 @@ func (t *GitHubTracker) get(path string, out interface{}) error {
 		resp, err := t.do(req)
 		if err != nil {
 			lastErr = err
+			if !isRetryable(err) {
+				break
+			}
 			continue
 		}
-		defer resp.Body.Close()
 
 		if out != nil {
-			return json.NewDecoder(resp.Body).Decode(out)
+			decodeErr := json.NewDecoder(resp.Body).Decode(out)
+			resp.Body.Close()
+			if decodeErr != nil {
+				return fmt.Errorf("decoding github response: %w", decodeErr)
+			}
+		} else {
+			resp.Body.Close()
 		}
 		return nil
 	}
@@ -525,6 +566,7 @@ func (t *GitHubTracker) postComment(num int, text string) error {
 	if err != nil {
 		return err
 	}
+	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	return nil
 }
@@ -547,6 +589,7 @@ func (t *GitHubTracker) addLabel(num int, label string) error {
 	if err != nil {
 		return err
 	}
+	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	return nil
 }
@@ -573,7 +616,7 @@ func (t *GitHubTracker) do(req *http.Request) (*http.Response, error) {
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("github API error %d: %s", resp.StatusCode, string(body))
+		return nil, &githubAPIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	return resp, nil

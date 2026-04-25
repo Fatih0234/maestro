@@ -153,6 +153,32 @@ func TestGitHubTracker_ClaimIssue_Race(t *testing.T) {
 	}
 }
 
+func TestGitHubTracker_GetIssue_404_NoRetry(t *testing.T) {
+	mux := http.NewServeMux()
+	_, tr := withTestServer(t, mux)
+
+	callCount := 0
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/999", func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"message": "Not Found"})
+	})
+
+	start := time.Now()
+	_, err := tr.GetIssue("999")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected GetIssue to fail for non-existent issue")
+	}
+	if callCount != 1 {
+		t.Errorf("expected exactly 1 API call (no retry for 404), got %d", callCount)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("expected immediate failure without retry sleep, took %v", elapsed)
+	}
+}
+
 func TestGitHubTracker_GetIssue_404(t *testing.T) {
 	mux := http.NewServeMux()
 	_, tr := withTestServer(t, mux)
@@ -300,6 +326,38 @@ func TestGitHubTracker_UpdateIssueState_Released(t *testing.T) {
 	}
 }
 
+func TestGitHubTracker_UpdateIssueState_Running(t *testing.T) {
+	mux := http.NewServeMux()
+	_, tr := withTestServer(t, mux)
+
+	mux.HandleFunc("/repos/test-owner/test-repo/issues/42", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PATCH" {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+		issue := map[string]interface{}{
+			"number":     42,
+			"title":      "Test Issue",
+			"body":       "Description",
+			"state":      "open",
+			"labels":     []map[string]string{},
+			"assignees":  []map[string]string{{"login": "contrabass-bot"}},
+			"html_url":   "https://github.com/test-owner/test-repo/issues/42",
+			"created_at": "2024-01-01T00:00:00Z",
+			"updated_at": "2024-01-01T00:00:00Z",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(issue)
+	})
+
+	issue, err := tr.UpdateIssueState("42", types.StateRunning)
+	if err != nil {
+		t.Fatalf("UpdateIssueState failed: %v", err)
+	}
+	if issue.State != types.StateRunning {
+		t.Errorf("expected state running, got %v", issue.State)
+	}
+}
+
 func TestGitHubTracker_SetRetryQueue(t *testing.T) {
 	mux := http.NewServeMux()
 	_, tr := withTestServer(t, mux)
@@ -343,6 +401,12 @@ func TestGitHubTracker_SetRetryQueue(t *testing.T) {
 	}
 	if issue.State != types.StateRetryQueued {
 		t.Errorf("expected state retry_queued, got %v", issue.State)
+	}
+	if issue.RetryAfter == nil {
+		t.Fatal("expected RetryAfter to be set")
+	}
+	if !issue.RetryAfter.Equal(retryAt) {
+		t.Errorf("RetryAfter = %v, want %v", *issue.RetryAfter, retryAt)
 	}
 }
 
