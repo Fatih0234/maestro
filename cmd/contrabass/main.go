@@ -95,12 +95,50 @@ func (l *cliLogger) Errorf(format string, args ...any) {
 }
 
 func main() {
-	flag.Parse()
+	// Dispatch to board subcommands before flag parsing so board commands
+	// can define their own flags.
+	if len(os.Args) > 1 && os.Args[1] == "board" {
+		if err := runBoardCommand(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 
+	flag.Parse()
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// buildDeps loads config and creates all core dependencies.
+func buildDeps(configPath string) (*config.Config, types.IssueTracker, workspace.WorkspaceManager, *diagnostics.Recorder, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	boardDir := cfg.Tracker.BoardDir
+	if boardDir == "" {
+		boardDir = ".contrabass/board"
+	}
+	tr := tracker.New(tracker.Config{
+		BoardDir:    boardDir,
+		IssuePrefix: cfg.Tracker.IssuePrefix,
+	})
+
+	wsMgr := workspace.New(workspace.Config{
+		BaseDir:      cfg.Workspace.BaseDir,
+		BranchPrefix: cfg.Workspace.BranchPrefix,
+	})
+
+	recorder, err := diagnostics.NewRecorder(boardDir)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("failed to initialize diagnostics recorder: %w", err)
+	}
+
+	return cfg, tr, wsMgr, recorder, nil
 }
 
 func run() error {
@@ -111,44 +149,21 @@ func run() error {
 
 	logger := newCLILogger(level)
 
-	// Load config
-	cfg, err := config.Load(*configPath)
+	cfg, tr, wsMgr, recorder, err := buildDeps(*configPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
+	defer recorder.Close()
 
 	logger.Infof("Starting Contrabass with config: %s", *configPath)
 	logger.Infof("  max_concurrency: %d", cfg.MaxConcurrency)
 	logger.Infof("  poll_interval: %dms", cfg.PollIntervalMs)
-
-	// Create tracker
-	boardDir := cfg.Tracker.BoardDir
-	if boardDir == "" {
-		boardDir = ".contrabass/board"
-	}
-	tr := tracker.New(tracker.Config{
-		BoardDir:    boardDir,
-		IssuePrefix: cfg.Tracker.IssuePrefix,
-	})
-
-	// Create workspace manager
-	wsMgr := workspace.New(workspace.Config{
-		BaseDir:      cfg.Workspace.BaseDir,
-		BranchPrefix: cfg.Workspace.BranchPrefix,
-	})
 
 	// Create agent runner based on config
 	agentRunner, err := newAgentRunnerFromConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create agent runner: %w", err)
 	}
-
-	// Create persistent diagnostics recorder
-	recorder, err := diagnostics.NewRecorder(boardDir)
-	if err != nil {
-		return fmt.Errorf("failed to initialize diagnostics recorder: %w", err)
-	}
-	defer recorder.Close()
 
 	// Create orchestrator
 	orch := orchestrator.New(cfg, tr, wsMgr, agentRunner)
@@ -174,7 +189,6 @@ func run() error {
 	return runHeadless(ctx, orch, sigChan, logger)
 }
 
-// runWithTUI starts the orchestrator with a Bubble Tea TUI.
 // newAgentRunnerFromConfig creates the appropriate agent runner based on cfg.Agent.Type.
 func newAgentRunnerFromConfig(cfg *config.Config) (types.AgentRunner, error) {
 	switch cfg.Agent.Type {

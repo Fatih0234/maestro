@@ -128,6 +128,32 @@ docs/
 - `--no-tui` — run headless without Bubble Tea
 - `--log-level debug|info|warn|error` — severity filter; invalid values exit with an error
 
+### Human review board commands
+
+When the orchestrator reaches `in_review`, a human decides whether to approve, reject, or retry:
+
+```bash
+# List issues awaiting review
+contrabass board list --state in_review
+
+# List all issues
+contrabass board list --all
+
+# Show the full review package for an issue
+contrabass board show CB-1
+
+# Approve an issue and mark it done
+contrabass board approve CB-1 --message "LGTM, merged manually"
+
+# Reject an issue and return it to todo
+contrabass board reject CB-1 --message "Needs tests for edge cases"
+
+# Manually retry a failed or rejected issue
+contrabass board retry CB-1
+```
+
+All state-transition commands fail fast if the issue is not in the expected state.
+
 ---
 
 ## Git Workflow

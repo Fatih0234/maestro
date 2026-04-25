@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -862,6 +863,74 @@ func (r *Recorder) CloseIssue(issueID string) error {
 		return err
 	}
 	return ir.close()
+}
+
+// LoadAttemptRecorder creates an AttemptRecorder for an existing attempt directory.
+// It is used by board commands to write review decisions on completed attempts.
+func (r *Recorder) LoadAttemptRecorder(issueID string, attempt int) (*AttemptRecorder, error) {
+	if r == nil {
+		return nil, errors.New("recorder is nil")
+	}
+	if strings.TrimSpace(issueID) == "" {
+		return nil, errors.New("issue ID is required")
+	}
+	if attempt < 1 {
+		return nil, fmt.Errorf("attempt must be >= 1, got %d", attempt)
+	}
+
+	// Ensure IssueRun exists
+	if err := r.EnsureIssue(types.Issue{ID: issueID}); err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	ir := r.issues[issueID]
+	r.mu.Unlock()
+	if ir == nil {
+		return nil, fmt.Errorf("issue run %q not initialized", issueID)
+	}
+
+	ir.mu.Lock()
+	if ar, ok := ir.attempts[attempt]; ok {
+		ir.mu.Unlock()
+		return ar, nil
+	}
+	ir.mu.Unlock()
+
+	attemptDir := filepath.Join(ir.attemptsDir, fmt.Sprintf("%03d", attempt))
+	metaPath := filepath.Join(attemptDir, "meta.json")
+
+	var meta AttemptMeta
+	if err := readJSONFile(metaPath, &meta); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	ar := &AttemptRecorder{
+		issueID:       issueID,
+		attempt:       attempt,
+		attemptDir:    attemptDir,
+		metaPath:      metaPath,
+		promptPath:    filepath.Join(attemptDir, "prompt.md"),
+		eventsPath:    filepath.Join(attemptDir, "events.jsonl"),
+		stdoutPath:    filepath.Join(attemptDir, "stdout.log"),
+		stderrPath:    filepath.Join(attemptDir, "stderr.log"),
+		stagesDir:     filepath.Join(attemptDir, "stages"),
+		reviewDir:     filepath.Join(attemptDir, "review"),
+		preflightDir:  filepath.Join(attemptDir, "preflight"),
+		postflightDir: filepath.Join(attemptDir, "postflight"),
+		issueRun:      ir,
+		stages:        make(map[types.Stage]*StageRecorder),
+		meta:          meta,
+	}
+
+	ir.mu.Lock()
+	ir.attempts[attempt] = ar
+	if ir.currentAttempt < attempt {
+		ir.currentAttempt = attempt
+	}
+	ir.mu.Unlock()
+
+	return ar, nil
 }
 
 func (ir *IssueRun) close() error {
