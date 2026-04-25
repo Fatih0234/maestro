@@ -236,6 +236,88 @@ workspace:
 	}
 }
 
+func TestLoad_ResolvesRelativePathsFromConfigDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "project")
+	_ = os.MkdirAll(subDir, 0o755)
+	workflowPath := filepath.Join(subDir, "WORKFLOW.md")
+
+	content := `---
+max_concurrency: 1
+poll_interval_ms: 1000
+tracker:
+  type: internal
+  board_dir: ./board
+  issue_prefix: CB
+agent:
+  type: opencode
+opencode:
+  binary_path: opencode serve
+workspace:
+  base_dir: ./workspaces
+---
+`
+	if err := os.WriteFile(workflowPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	cfg, err := Load(workflowPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	wantBoardDir := filepath.Join(subDir, "board")
+	if cfg.Tracker.BoardDir != wantBoardDir {
+		t.Errorf("Tracker.BoardDir = %q, want %q", cfg.Tracker.BoardDir, wantBoardDir)
+	}
+
+	wantBaseDir := filepath.Join(subDir, "workspaces")
+	if cfg.Workspace.BaseDir != wantBaseDir {
+		t.Errorf("Workspace.BaseDir = %q, want %q", cfg.Workspace.BaseDir, wantBaseDir)
+	}
+}
+
+func TestLoad_KeepsAbsolutePaths(t *testing.T) {
+	tmpDir := t.TempDir()
+	workflowPath := filepath.Join(tmpDir, "WORKFLOW.md")
+
+	absBoardDir := filepath.Join(tmpDir, "absolute", "board")
+	absBaseDir := filepath.Join(tmpDir, "absolute", "workspaces")
+	_ = os.MkdirAll(absBoardDir, 0o755)
+	_ = os.MkdirAll(absBaseDir, 0o755)
+
+	content := `---
+max_concurrency: 1
+poll_interval_ms: 1000
+tracker:
+  type: internal
+  board_dir: ` + absBoardDir + `
+  issue_prefix: CB
+agent:
+  type: opencode
+opencode:
+  binary_path: opencode serve
+workspace:
+  base_dir: ` + absBaseDir + `
+---
+`
+	if err := os.WriteFile(workflowPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	cfg, err := Load(workflowPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Tracker.BoardDir != absBoardDir {
+		t.Errorf("Tracker.BoardDir = %q, want %q", cfg.Tracker.BoardDir, absBoardDir)
+	}
+	if cfg.Workspace.BaseDir != absBaseDir {
+		t.Errorf("Workspace.BaseDir = %q, want %q", cfg.Workspace.BaseDir, absBaseDir)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
 }

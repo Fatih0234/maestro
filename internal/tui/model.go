@@ -748,6 +748,11 @@ func formatEventMessage(event types.OrchestratorEvent) (string, string) {
 		return "stall detected", "warn"
 	case orchestrator.EventMergeFailed:
 		return "merge failed", "error"
+	case orchestrator.EventFetchError:
+		if p, ok := event.Payload.(orchestrator.FetchErrorPayload); ok {
+			return fmt.Sprintf("fetch error (%s): %s", p.Operation, truncate(p.Error, 40)), "error"
+		}
+		return "fetch error", "error"
 	default:
 		return event.Type, "info"
 	}

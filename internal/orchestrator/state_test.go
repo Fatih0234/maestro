@@ -232,3 +232,27 @@ func TestStateManager_RemoveNonExistent(t *testing.T) {
 	// Should not panic
 	s.Remove("CB-999")
 }
+
+func TestStateManager_ConcurrentReadWrite(t *testing.T) {
+	s := NewStateManager()
+	issue := makeTestIssue("CB-1", "Test")
+	proc := makeTestProcess("sess-1")
+	s.Add("CB-1", issue, 1, types.StageExecute, proc)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = s.Get("CB-1")
+			_ = s.GetAll()
+			_ = s.GetByPhase(types.PhaseLaunchingAgentProcess)
+		}()
+		go func(i int) {
+			defer wg.Done()
+			s.UpdateLastEvent("CB-1")
+			s.UpdateTokens("CB-1", int64(i), int64(i))
+		}(i)
+	}
+	wg.Wait()
+}

@@ -435,8 +435,28 @@ func TestOrchestrator_DispatchReady_SkipsReviewIssues_DefenseInDepth(t *testing.
 	if got := tracker.ClaimCount("CB-1"); got != 0 {
 		t.Errorf("ClaimCount(CB-1) = %d, want 0 for in_review issue", got)
 	}
-	if got := runner.StartCalls; got != 0 {
+	if got := runner.StartCallCount(); got != 0 {
 		t.Errorf("StartCalls = %d, want 0 for in_review issue", got)
+	}
+}
+
+func TestOrchestrator_DispatchReady_FetchErrorEmitsEvent(t *testing.T) {
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
+	tracker.FetchError = errors.New("tracker unreachable")
+	runner := NewMockAgentRunner()
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	events := NewEventCollector(orch.Events)
+
+	orch.poll()
+
+	if !events.WaitFor(EventFetchError, 500*time.Millisecond) {
+		t.Error("Expected EventFetchError when tracker.FetchIssues fails")
+	}
+	if events.Has(EventIssueClaimed) {
+		t.Error("Did not expect IssueClaimed when fetch fails")
 	}
 }
 
@@ -551,13 +571,13 @@ func TestOrchestrator_DispatchBackoff_ConsumesReadyEntryOnce(t *testing.T) {
 
 	orch.dispatchBackoff()
 	time.Sleep(50 * time.Millisecond) // allow goroutine to start agent
-	if got := runner.StartCalls; got != 1 {
+	if got := runner.StartCallCount(); got != 1 {
 		t.Fatalf("StartCalls after first dispatch = %d, want 1", got)
 	}
 
 	// A second dispatch cycle should not start a duplicate run for the same entry.
 	orch.dispatchBackoff()
-	if got := runner.StartCalls; got != 1 {
+	if got := runner.StartCallCount(); got != 1 {
 		t.Fatalf("StartCalls after second dispatch = %d, want 1", got)
 	}
 	if got := tracker.ClaimCount("CB-1"); got != 1 {
@@ -578,10 +598,7 @@ func TestOrchestrator_HandleAgentDone_Failure(t *testing.T) {
 
 	orch.poll()
 
-	// Wait for agent to finish
-	time.Sleep(50 * time.Millisecond)
-
-	if !events.Has(EventIssueRetrying) {
+	if !events.WaitFor(EventIssueRetrying, 2*time.Second) {
 		t.Error("Expected IssueRetrying event")
 	}
 	if orch.Backoff.Len() != 1 {
@@ -617,7 +634,7 @@ func TestOrchestrator_MultiStage_HappyPath(t *testing.T) {
 		t.Errorf("issue state = %v, want %v", state, types.StateInReview)
 	}
 	// Should have started the agent 3 times (plan, execute, verify)
-	if got := runner.StartCalls; got != 3 {
+	if got := runner.StartCallCount(); got != 3 {
 		t.Errorf("StartCalls = %d, want 3", got)
 	}
 }
@@ -635,9 +652,8 @@ func TestOrchestrator_MultiStage_PlanFailureRetriesPlan(t *testing.T) {
 	events := NewEventCollector(orch.Events)
 
 	orch.poll()
-	time.Sleep(50 * time.Millisecond)
 
-	if !events.Has(EventStageFailed) {
+	if !events.WaitFor(EventStageFailed, 2*time.Second) {
 		t.Error("Expected StageFailed event")
 	}
 	if events.Has(EventIssueReadyForReview) {
@@ -651,7 +667,7 @@ func TestOrchestrator_MultiStage_PlanFailureRetriesPlan(t *testing.T) {
 		t.Errorf("retry stage = %v, want plan", entry.Stage)
 	}
 	// Only 1 start call (plan stage)
-	if got := runner.StartCalls; got != 1 {
+	if got := runner.StartCallCount(); got != 1 {
 		t.Errorf("StartCalls = %d, want 1", got)
 	}
 }
@@ -685,7 +701,7 @@ func TestOrchestrator_MultiStage_ExecuteFailureRetriesExecute(t *testing.T) {
 		t.Errorf("retry stage = %v, want execute", entry.Stage)
 	}
 	// 2 start calls (plan succeeded, execute failed)
-	if got := runner.StartCalls; got != 2 {
+	if got := runner.StartCallCount(); got != 2 {
 		t.Errorf("StartCalls = %d, want 2", got)
 	}
 }
@@ -719,7 +735,7 @@ func TestOrchestrator_MultiStage_VerifyFailureBlocksReview(t *testing.T) {
 		t.Errorf("retry stage = %v, want verify", entry.Stage)
 	}
 	// 3 start calls (plan + execute succeeded, verify failed)
-	if got := runner.StartCalls; got != 3 {
+	if got := runner.StartCallCount(); got != 3 {
 		t.Errorf("StartCalls = %d, want 3", got)
 	}
 }
@@ -836,7 +852,7 @@ func TestOrchestrator_StopBeforeRunSkipsInitialPoll(t *testing.T) {
 	if got := tracker.ClaimCount("CB-1"); got != 0 {
 		t.Errorf("ClaimCount(CB-1) = %d, want 0", got)
 	}
-	if got := runner.StartCalls; got != 0 {
+	if got := runner.StartCallCount(); got != 0 {
 		t.Errorf("StartCalls = %d, want 0", got)
 	}
 	if got := runner.CloseCalls; got != 1 {
@@ -945,10 +961,8 @@ func TestOrchestrator_ReconcileRunning_TimeoutEnqueuesBackoff(t *testing.T) {
 	issue := makeTestIssue("CB-1", "Test")
 	orch.State.Add("CB-1", issue, 1, types.StageExecute, &types.AgentProcess{})
 
-	// Backdate start time so it appears timed out
-	if runs := orch.State.GetAll(); len(runs) == 1 {
-		runs[0].StartedAt = time.Now().Add(-time.Hour)
-	}
+	// Wait for the 1ms timeout to elapse
+	time.Sleep(20 * time.Millisecond)
 
 	orch.reconcileRunning()
 
@@ -980,10 +994,8 @@ func TestOrchestrator_ReconcileRunning_StallEnqueuesBackoff(t *testing.T) {
 	issue := makeTestIssue("CB-1", "Test")
 	orch.State.Add("CB-1", issue, 1, types.StageExecute, &types.AgentProcess{})
 
-	// Backdate last event time so it appears stalled
-	if runs := orch.State.GetAll(); len(runs) == 1 {
-		runs[0].LastEventAt = time.Now().Add(-time.Hour)
-	}
+	// Wait for the 1ms stall timeout to elapse
+	time.Sleep(20 * time.Millisecond)
 
 	orch.reconcileRunning()
 

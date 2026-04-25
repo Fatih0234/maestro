@@ -194,9 +194,9 @@ monitor:
 	finalCommit := r.captureCommit(ctx, workspacePath)
 	diff := r.captureDiff(ctx, workspacePath)
 
-	// 6b. Programmatic commit — if the agent made changes but didn't commit,
-	// the system commits them so the branch actually contains the work.
-	if runErr == nil && r.hasUncommittedChanges(workspacePath) {
+	// 6b. Programmatic commit — only allowed in execute stage so plan/verify
+	// stages don't accidentally commit partial or review-only changes.
+	if runErr == nil && stage == types.StageExecute && r.hasUncommittedChanges(workspacePath) {
 		committedHash, commitErr := r.stageCommit(workspacePath, issue)
 		if commitErr == nil && committedHash != "" {
 			finalCommit = committedHash

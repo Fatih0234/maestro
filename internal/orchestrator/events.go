@@ -30,6 +30,7 @@ const (
 	EventTimeoutDetected     = "timeout.detected"
 	EventPollCompleted       = "poll.completed"
 	EventMergeFailed         = "merge.failed"
+	EventFetchError          = "fetch.error"
 )
 
 // Event payloads
@@ -156,4 +157,10 @@ type TimeoutDetectedPayload struct {
 type MergeFailedPayload struct {
 	IssueID string
 	Error   string
+}
+
+// FetchErrorPayload is the payload for EventFetchError.
+type FetchErrorPayload struct {
+	Operation string
+	Error     string
 }

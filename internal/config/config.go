@@ -184,6 +184,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
+	// Resolve relative paths against the config file's directory
+	cfg.ResolvePaths(filepath.Dir(absPath))
+
 	return cfg, nil
 }
 

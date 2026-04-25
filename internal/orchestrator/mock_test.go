@@ -136,6 +136,13 @@ func (m *MockAgentRunner) GetStarted() []*MockAgentProcess {
 	return m.started
 }
 
+// StartCallCount returns the number of times Start was called.
+func (m *MockAgentRunner) StartCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.StartCalls
+}
+
 // MockTracker is a mock implementation of IssueTracker for testing.
 type MockTracker struct {
 	mu       sync.Mutex

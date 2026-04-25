@@ -107,13 +107,16 @@ func (s *StateManager) SetError(issueID string, err string) {
 	}
 }
 
-// Get returns a run state.
-func (s *StateManager) Get(issueID string) (*RunState, bool) {
+// Get returns a copy of a run state.
+func (s *StateManager) Get(issueID string) (RunState, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	run, ok := s.runs[issueID]
-	return run, ok
+	if !ok {
+		return RunState{}, false
+	}
+	return *run, true
 }
 
 // Remove deletes a run state.
@@ -132,27 +135,27 @@ func (s *StateManager) Len() int {
 	return len(s.runs)
 }
 
-// GetAll returns all run states.
-func (s *StateManager) GetAll() []*RunState {
+// GetAll returns copies of all run states.
+func (s *StateManager) GetAll() []RunState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]*RunState, 0, len(s.runs))
+	result := make([]RunState, 0, len(s.runs))
 	for _, run := range s.runs {
-		result = append(result, run)
+		result = append(result, *run)
 	}
 	return result
 }
 
-// GetByPhase returns runs in a specific phase.
-func (s *StateManager) GetByPhase(phase types.RunPhase) []*RunState {
+// GetByPhase returns copies of runs in a specific phase.
+func (s *StateManager) GetByPhase(phase types.RunPhase) []RunState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := make([]*RunState, 0)
+	result := make([]RunState, 0)
 	for _, run := range s.runs {
 		if run.Phase == phase {
-			result = append(result, run)
+			result = append(result, *run)
 		}
 	}
 	return result

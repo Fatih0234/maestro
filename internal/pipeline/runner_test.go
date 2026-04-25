@@ -297,3 +297,124 @@ func TestRunner_Run_AgentStartFailureWritesStageResult(t *testing.T) {
 		t.Error("expected retryable = true")
 	}
 }
+
+// dirtyWorkspaceRunner is a mock agent that writes a file to the workspace
+// before completing, leaving uncommitted changes.
+type dirtyWorkspaceRunner struct {
+	workspace string
+}
+
+func (m *dirtyWorkspaceRunner) Start(ctx context.Context, issue types.Issue, workspace, prompt string) (*types.AgentProcess, error) {
+	m.workspace = workspace
+	events := make(chan types.AgentEvent, 4)
+	done := make(chan error, 1)
+	go func() {
+		// Write a file to dirty the workspace
+		_ = os.WriteFile(filepath.Join(workspace, "dirty.txt"), []byte("dirty"), 0o644)
+		close(events)
+		done <- nil
+		close(done)
+	}()
+	return &types.AgentProcess{
+		PID:       1234,
+		SessionID: "dirty-session",
+		Events:    events,
+		Done:      done,
+	}, nil
+}
+
+func (m *dirtyWorkspaceRunner) Stop(proc *types.AgentProcess) error { return nil }
+func (m *dirtyWorkspaceRunner) Close() error                         { return nil }
+
+func TestRunner_Run_NoAutoCommitInPlanStage(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
+	ws := workspace.New(workspace.Config{BaseDir: tmpDir, BranchPrefix: "test/"})
+	runner := &Runner{
+		Config: &config.Config{
+			Content:   "Fix: {{ issue.title }}",
+			Workspace: config.WorkspaceConfig{BranchPrefix: "test/"},
+		},
+		Workspace:   ws,
+		AgentRunner: &dirtyWorkspaceRunner{},
+	}
+
+	issue := types.Issue{ID: "CB-1", Title: "Test Issue", Description: "Do something"}
+	result, err := runner.Run(context.Background(), issue, 1, types.StagePlan, func(types.OrchestratorEvent) {})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatal("expected success")
+	}
+
+	// There should be no new commit because plan stage must not auto-commit
+	beforeCommit := result.FinalCommit
+	gitLog := runner.gitOutput(context.Background(), result.WorkspacePath, "log", "--oneline")
+	if strings.Contains(gitLog, "feat(CB-1)") {
+		t.Error("plan stage should not auto-commit changes")
+	}
+	if result.FinalCommit != beforeCommit {
+		t.Error("plan stage should not create a new commit")
+	}
+}
+
+func TestRunner_Run_AutoCommitInExecuteStage(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
+	ws := workspace.New(workspace.Config{BaseDir: tmpDir, BranchPrefix: "test/"})
+	runner := &Runner{
+		Config: &config.Config{
+			Content:   "Fix: {{ issue.title }}",
+			Workspace: config.WorkspaceConfig{BranchPrefix: "test/"},
+		},
+		Workspace:   ws,
+		AgentRunner: &dirtyWorkspaceRunner{},
+	}
+
+	issue := types.Issue{ID: "CB-1", Title: "Test Issue", Description: "Do something"}
+	result, err := runner.Run(context.Background(), issue, 1, types.StageExecute, func(types.OrchestratorEvent) {})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatal("expected success")
+	}
+
+	// There should be a new commit because execute stage auto-commits
+	gitLog := runner.gitOutput(context.Background(), result.WorkspacePath, "log", "--oneline")
+	if !strings.Contains(gitLog, "feat(CB-1)") {
+		t.Error("execute stage should auto-commit changes")
+	}
+	if result.FinalCommit == "" {
+		t.Error("execute stage should produce a final commit hash")
+	}
+}
+
+func TestRunner_Run_NoAutoCommitInVerifyStage(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
+	ws := workspace.New(workspace.Config{BaseDir: tmpDir, BranchPrefix: "test/"})
+	runner := &Runner{
+		Config: &config.Config{
+			Content:   "Fix: {{ issue.title }}",
+			Workspace: config.WorkspaceConfig{BranchPrefix: "test/"},
+		},
+		Workspace:   ws,
+		AgentRunner: &dirtyWorkspaceRunner{},
+	}
+
+	issue := types.Issue{ID: "CB-1", Title: "Test Issue", Description: "Do something"}
+	result, err := runner.Run(context.Background(), issue, 1, types.StageVerify, func(types.OrchestratorEvent) {})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Fatal("expected success")
+	}
+
+	gitLog := runner.gitOutput(context.Background(), result.WorkspacePath, "log", "--oneline")
+	if strings.Contains(gitLog, "feat(CB-1)") {
+		t.Error("verify stage should not auto-commit changes")
+	}
+}

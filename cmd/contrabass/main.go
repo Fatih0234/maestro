@@ -137,17 +137,11 @@ func run() error {
 		BranchPrefix: cfg.Workspace.BranchPrefix,
 	})
 
-	// Create agent runner (OpenCode)
-	agentRunner := agent.NewOpenCodeRunner(
-		cfg.OpenCode.BinaryPath,
-		cfg.OpenCode.Port,
-		cfg.OpenCode.Password,
-		"", // username - not used currently
-		30*time.Second,
-		cfg.OpenCode.Profile,
-		cfg.OpenCode.Agent,
-		cfg.OpenCode.ConfigDir,
-	)
+	// Create agent runner based on config
+	agentRunner, err := newAgentRunnerFromConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create agent runner: %w", err)
+	}
 
 	// Create persistent diagnostics recorder
 	recorder, err := diagnostics.NewRecorder(boardDir)
@@ -181,6 +175,30 @@ func run() error {
 }
 
 // runWithTUI starts the orchestrator with a Bubble Tea TUI.
+// newAgentRunnerFromConfig creates the appropriate agent runner based on cfg.Agent.Type.
+func newAgentRunnerFromConfig(cfg *config.Config) (types.AgentRunner, error) {
+	switch cfg.Agent.Type {
+	case "opencode":
+		if cfg.OpenCode == nil {
+			return nil, fmt.Errorf("agent.type=%s requires opencode configuration block", cfg.Agent.Type)
+		}
+		return agent.NewOpenCodeRunner(
+			cfg.OpenCode.BinaryPath,
+			cfg.OpenCode.Port,
+			cfg.OpenCode.Password,
+			"", // username - not used currently
+			30*time.Second,
+			cfg.OpenCode.Profile,
+			cfg.OpenCode.Agent,
+			cfg.OpenCode.ConfigDir,
+		), nil
+	case "codex":
+		return nil, fmt.Errorf("agent.type=%s is not supported yet", cfg.Agent.Type)
+	default:
+		return nil, fmt.Errorf("agent.type=%s is not supported", cfg.Agent.Type)
+	}
+}
+
 func runWithTUI(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal, logger *cliLogger) error {
 	// Create TUI model
 	tuiModel := tui.NewModel()

@@ -160,7 +160,7 @@ func (o *Orchestrator) reconcileRunning() {
 }
 
 // handleTimeout handles a run that has exceeded the agent timeout.
-func (o *Orchestrator) handleTimeout(run *RunState, elapsed time.Duration) {
+func (o *Orchestrator) handleTimeout(run RunState, elapsed time.Duration) {
 	issueID := run.Issue.ID
 
 	// Cancel the run's context. The pipeline runner will stop the agent.
@@ -200,7 +200,7 @@ func (o *Orchestrator) handleTimeout(run *RunState, elapsed time.Duration) {
 }
 
 // handleStall handles a run that has stalled (no recent events).
-func (o *Orchestrator) handleStall(run *RunState, lastEventAge time.Duration) {
+func (o *Orchestrator) handleStall(run RunState, lastEventAge time.Duration) {
 	issueID := run.Issue.ID
 
 	// Cancel the run's context. The pipeline runner will stop the agent.
@@ -300,6 +300,10 @@ func (o *Orchestrator) dispatchReady() {
 	// Fetch unclaimed issues
 	issues, err := o.Tracker.FetchIssues()
 	if err != nil {
+		o.emit(EventFetchError, "", FetchErrorPayload{
+			Operation: "FetchIssues",
+			Error:     err.Error(),
+		})
 		return
 	}
 
