@@ -10,28 +10,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
 )
-
-// reorderArgs moves flags before positional arguments so that flag.FlagSet
-// can parse them regardless of order.
-func reorderArgs(args []string) []string {
-	var flags, positional []string
-	for i := 0; i < len(args); i++ {
-		if strings.HasPrefix(args[i], "-") {
-			flags = append(flags, args[i])
-			// If this flag doesn't contain '=' and the next arg exists and isn't a flag,
-			// it's the value for this flag.
-			if !strings.Contains(args[i], "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				flags = append(flags, args[i+1])
-				i++
-			}
-		} else {
-			positional = append(positional, args[i])
-		}
-	}
-	return append(flags, positional...)
-}
 
 func runBoardCommand(args []string) error {
 	if len(args) < 1 {
@@ -90,13 +71,13 @@ func boardList(args []string) error {
 		id := strings.TrimSuffix(entry.Name(), ".json")
 		issue, err := tr.GetIssue(id)
 		if err != nil {
-			continue
+			return fmt.Errorf("loading issue %q: %w", id, err)
 		}
 		if *showAll {
 			issues = append(issues, issue)
 			continue
 		}
-		if *stateFilter != "" && issue.State.BoardState() == *stateFilter {
+		if *stateFilter == "" || issue.State.BoardState() == *stateFilter {
 			issues = append(issues, issue)
 		}
 	}
@@ -230,7 +211,7 @@ func boardShow(args []string) error {
 func boardApprove(args []string) error {
 	fs := flag.NewFlagSet("board approve", flag.ExitOnError)
 	message := fs.String("message", "", "approval note")
-	if err := fs.Parse(reorderArgs(args)); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	remaining := fs.Args()
@@ -270,19 +251,21 @@ func boardApprove(args []string) error {
 		return fmt.Errorf("loading attempt recorder: %w", err)
 	}
 
+	// Update tracker state first so we never write a decision artifact
+	// without the tracker reflecting the transition.
+	if _, err := tr.UpdateIssueState(issue.ID, types.StateReleased); err != nil {
+		return fmt.Errorf("updating issue state: %w", err)
+	}
+
 	decision := types.ReviewDecision{
 		Decision:      types.ReviewDecisionApproved,
-		ReviewedBy:    defaultReviewer(),
+		ReviewedBy:    diagnostics.DefaultReviewer(),
 		ReviewedAt:    time.Now().UTC(),
 		Notes:         *message,
 		FollowUpState: types.ReviewFollowUpDone,
 	}
 	if err := ar.RecordReviewDecision(decision); err != nil {
 		return fmt.Errorf("recording review decision: %w", err)
-	}
-
-	if _, err := tr.UpdateIssueState(issue.ID, types.StateReleased); err != nil {
-		return fmt.Errorf("updating issue state: %w", err)
 	}
 
 	fmt.Printf("Approved %s\n", issueID)
@@ -295,7 +278,7 @@ func boardApprove(args []string) error {
 func boardReject(args []string) error {
 	fs := flag.NewFlagSet("board reject", flag.ExitOnError)
 	message := fs.String("message", "", "rejection note")
-	if err := fs.Parse(reorderArgs(args)); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	remaining := fs.Args()
@@ -339,19 +322,21 @@ func boardReject(args []string) error {
 		return fmt.Errorf("loading attempt recorder: %w", err)
 	}
 
+	// Update tracker state first so we never write a decision artifact
+	// without the tracker reflecting the transition.
+	if _, err := tr.UpdateIssueState(issue.ID, types.StateUnclaimed); err != nil {
+		return fmt.Errorf("updating issue state: %w", err)
+	}
+
 	decision := types.ReviewDecision{
 		Decision:      types.ReviewDecisionRejected,
-		ReviewedBy:    defaultReviewer(),
+		ReviewedBy:    diagnostics.DefaultReviewer(),
 		ReviewedAt:    time.Now().UTC(),
 		Notes:         *message,
 		FollowUpState: types.ReviewFollowUpTodo,
 	}
 	if err := ar.RecordReviewDecision(decision); err != nil {
 		return fmt.Errorf("recording review decision: %w", err)
-	}
-
-	if _, err := tr.UpdateIssueState(issue.ID, types.StateUnclaimed); err != nil {
-		return fmt.Errorf("updating issue state: %w", err)
 	}
 
 	fmt.Printf("Rejected %s\n", issueID)
@@ -386,17 +371,6 @@ func boardRetry(args []string) error {
 
 	fmt.Printf("Retry queued %s -> todo\n", issueID)
 	return nil
-}
-
-// defaultReviewer returns the current user name.
-func defaultReviewer() string {
-	if reviewer := strings.TrimSpace(os.Getenv("USER")); reviewer != "" {
-		return reviewer
-	}
-	if reviewer := strings.TrimSpace(os.Getenv("USERNAME")); reviewer != "" {
-		return reviewer
-	}
-	return "contrabass"
 }
 
 // humanDuration formats a duration in a human-readable way.

@@ -192,7 +192,7 @@ func TestBoardApprove_UpdatesStateAndWritesDecision(t *testing.T) {
 	*configPath = filepath.Join(tmpDir, "WORKFLOW.md")
 	defer func() { *configPath = oldConfigPath }()
 
-	err = boardApprove([]string{issue.ID, "--message", "LGTM"})
+	err = boardApprove([]string{"--message", "LGTM", issue.ID})
 	if err != nil {
 		t.Fatalf("boardApprove: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestBoardReject_UpdatesStateAndWritesDecision(t *testing.T) {
 	*configPath = filepath.Join(tmpDir, "WORKFLOW.md")
 	defer func() { *configPath = oldConfigPath }()
 
-	err = boardReject([]string{issue.ID, "--message", "Needs tests"})
+	err = boardReject([]string{"--message", "Needs tests", issue.ID})
 	if err != nil {
 		t.Fatalf("boardReject: %v", err)
 	}
@@ -336,6 +336,104 @@ func TestBoardRetry_FailsIfInProgress(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "currently in_progress") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestBoardApprove_FailsWithNoAttempts(t *testing.T) {
+	tmpDir, tr, recorder := setupTestBoard(t)
+	defer recorder.Close()
+
+	issue, _ := tr.CreateIssue("No Attempts", "Desc", nil)
+	if _, err := tr.UpdateIssueState(issue.ID, types.StateInReview); err != nil {
+		t.Fatalf("UpdateIssueState: %v", err)
+	}
+
+	// Ensure issue exists in recorder so summary.json is present,
+	// but do not create any attempt.
+	if err := recorder.EnsureIssue(issue); err != nil {
+		t.Fatalf("EnsureIssue: %v", err)
+	}
+
+	oldConfigPath := *configPath
+	*configPath = filepath.Join(tmpDir, "WORKFLOW.md")
+	defer func() { *configPath = oldConfigPath }()
+
+	err := boardApprove([]string{issue.ID})
+	if err == nil {
+		t.Fatal("expected error when no attempt exists")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' error, got: %v", err)
+	}
+}
+
+func TestBoardReject_NotesPreserved(t *testing.T) {
+	tmpDir, tr, recorder := setupTestBoard(t)
+	defer recorder.Close()
+
+	issue, _ := tr.CreateIssue("Reject Notes", "Desc", nil)
+	if _, err := tr.UpdateIssueState(issue.ID, types.StateInReview); err != nil {
+		t.Fatalf("UpdateIssueState: %v", err)
+	}
+
+	if err := recorder.EnsureIssue(issue); err != nil {
+		t.Fatalf("EnsureIssue: %v", err)
+	}
+	_, err := recorder.BeginAttempt(issue, 1, "opencode/CB-1", "/tmp/ws", "prompt", "", "")
+	if err != nil {
+		t.Fatalf("BeginAttempt: %v", err)
+	}
+
+	oldConfigPath := *configPath
+	*configPath = filepath.Join(tmpDir, "WORKFLOW.md")
+	defer func() { *configPath = oldConfigPath }()
+
+	err = boardReject([]string{"--message", "Add more tests", issue.ID})
+	if err != nil {
+		t.Fatalf("boardReject: %v", err)
+	}
+
+	decision, err := recorder.LoadReviewDecision(issue.ID, 1)
+	if err != nil {
+		t.Fatalf("LoadReviewDecision: %v", err)
+	}
+	if decision.Notes != "Add more tests" {
+		t.Errorf("notes = %q, want %q", decision.Notes, "Add more tests")
+	}
+}
+
+func TestBoardList_DefaultShowsAll(t *testing.T) {
+	tmpDir, tr, recorder := setupTestBoard(t)
+	defer recorder.Close()
+
+	_, _ = tr.CreateIssue("Issue A", "Desc A", nil)
+	issueB, _ := tr.CreateIssue("Issue B", "Desc B", nil)
+	tr.UpdateIssueState(issueB.ID, types.StateInReview)
+
+	oldConfigPath := *configPath
+	*configPath = filepath.Join(tmpDir, "WORKFLOW.md")
+	defer func() { *configPath = oldConfigPath }()
+
+	var buf bytes.Buffer
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	// No flags at all — should show all issues.
+	err := boardList([]string{})
+	w.Close()
+	os.Stdout = oldStdout
+	if err != nil {
+		t.Fatalf("boardList: %v", err)
+	}
+	buf.ReadFrom(r)
+	out := buf.String()
+
+	if !strings.Contains(out, "CB-1") {
+		t.Errorf("expected CB-1 in default output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "CB-2") {
+		t.Errorf("expected CB-2 in default output, got:\n%s", out)
 	}
 }
 

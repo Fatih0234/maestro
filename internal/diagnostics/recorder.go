@@ -900,9 +900,16 @@ func (r *Recorder) LoadAttemptRecorder(issueID string, attempt int) (*AttemptRec
 	attemptDir := filepath.Join(ir.attemptsDir, fmt.Sprintf("%03d", attempt))
 	metaPath := filepath.Join(attemptDir, "meta.json")
 
-	var meta AttemptMeta
-	if err := readJSONFile(metaPath, &meta); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(attemptDir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("attempt %03d for issue %q not found", attempt, issueID)
+		}
 		return nil, err
+	}
+
+	var meta AttemptMeta
+	if err := readJSONFile(metaPath, &meta); err != nil {
+		return nil, fmt.Errorf("loading attempt meta: %w", err)
 	}
 
 	ar := &AttemptRecorder{
