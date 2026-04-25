@@ -3,6 +3,7 @@ package web
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +12,9 @@ import (
 
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
 )
+
+//go:embed static/index.html
+var dashboardHTML embed.FS
 
 // SnapshotProvider provides a point-in-time snapshot of orchestrator state.
 type SnapshotProvider interface {
@@ -87,16 +91,35 @@ func NewServer(addr string, provider SnapshotProvider, hub *Hub, eventSource <-c
 	}
 }
 
-// Start runs the HTTP server. It blocks until the server stops.
-func (s *Server) Start() error {
+// Handler returns the HTTP handler for the server.
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/state", s.handleState)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
 	mux.HandleFunc("/api/v1/refresh", s.handleRefresh)
+	mux.HandleFunc("/", s.handleDashboard)
+	return mux
+}
 
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := dashboardHTML.ReadFile("static/index.html")
+	if err != nil {
+		http.Error(w, "Dashboard not found", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
+}
+
+// Start runs the HTTP server. It blocks until the server stops.
+func (s *Server) Start() error {
 	s.httpServer = &http.Server{
 		Addr:        s.addr,
-		Handler:     mux,
+		Handler:     s.Handler(),
 		ReadTimeout: 5 * time.Second,
 		IdleTimeout: 120 * time.Second,
 		// WriteTimeout is intentionally 0 because SSE streams are long-lived.

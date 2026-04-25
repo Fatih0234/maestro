@@ -166,6 +166,28 @@ func TestIntegration_RefreshEndpoint(t *testing.T) {
 	}
 }
 
+// TestIntegration_DashboardEndpoint verifies the root path serves HTML.
+func TestIntegration_DashboardEndpoint(t *testing.T) {
+	provider := &mockSnapshotProvider{}
+	hub := NewHub()
+	srv := NewServer("127.0.0.1:0", provider, hub, nil, 0)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("unexpected content-type: %s", ct)
+	}
+}
+
 // TestIntegration_MultipleClients verifies multiple SSE clients receive events.
 func TestIntegration_MultipleClients(t *testing.T) {
 	provider := &mockSnapshotProvider{
