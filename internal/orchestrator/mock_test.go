@@ -87,11 +87,11 @@ func (m *MockAgentRunner) Start(ctx context.Context, issue types.Issue, workspac
 				return
 			}
 		}
-		// Close events to signal completion
-		close(events)
 		// Send done with configured error (nil for success, error for failure)
+		// before closing events so the pipeline monitor always sees the error.
 		done <- doneErr
 		close(done)
+		close(events)
 	}()
 
 	proc := &MockAgentProcess{

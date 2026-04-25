@@ -3,11 +3,14 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/fatihkarahan/contrabass-pi/internal/config"
+	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
 	"github.com/fatihkarahan/contrabass-pi/internal/workspace"
 )
@@ -916,15 +919,205 @@ func TestOrchestrator_EmitNonBlocking(t *testing.T) {
 	orch.emit(EventPollStarted, "", struct{}{})
 }
 
-// failingWorkspace is a workspace that always fails to create.
-type failingWorkspace struct {
-	err error
+func TestOrchestrator_ReconcileRunning_TimeoutEnqueuesBackoff(t *testing.T) {
+	cfg := testConfig()
+	cfg.AgentTimeoutMs = 1 // 1ms timeout
+
+	tracker := NewMockTracker(nil)
+	runner := NewMockAgentRunner()
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+
+	issue := makeTestIssue("CB-1", "Test")
+	orch.State.Add("CB-1", issue, 1, types.StageExecute, &types.AgentProcess{})
+
+	// Backdate start time so it appears timed out
+	if runs := orch.State.GetAll(); len(runs) == 1 {
+		runs[0].StartedAt = time.Now().Add(-time.Hour)
+	}
+
+	orch.reconcileRunning()
+
+	if orch.Backoff.Len() != 1 {
+		t.Errorf("Backoff.Len() = %d, want 1", orch.Backoff.Len())
+	}
+	entry, ok := orch.Backoff.Get("CB-1")
+	if !ok {
+		t.Fatal("expected backoff entry for CB-1")
+	}
+	if entry.Stage != types.StageExecute {
+		t.Errorf("backoff stage = %v, want execute", entry.Stage)
+	}
+	if entry.Attempt != 2 {
+		t.Errorf("backoff attempt = %d, want 2", entry.Attempt)
+	}
 }
 
-func (w *failingWorkspace) Create(ctx context.Context, issue types.Issue) (string, error) {
-	return "", w.err
+func TestOrchestrator_ReconcileRunning_StallEnqueuesBackoff(t *testing.T) {
+	cfg := testConfig()
+	cfg.StallTimeoutMs = 1 // 1ms stall timeout
+
+	tracker := NewMockTracker(nil)
+	runner := NewMockAgentRunner()
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+
+	issue := makeTestIssue("CB-1", "Test")
+	orch.State.Add("CB-1", issue, 1, types.StageExecute, &types.AgentProcess{})
+
+	// Backdate last event time so it appears stalled
+	if runs := orch.State.GetAll(); len(runs) == 1 {
+		runs[0].LastEventAt = time.Now().Add(-time.Hour)
+	}
+
+	orch.reconcileRunning()
+
+	if orch.Backoff.Len() != 1 {
+		t.Errorf("Backoff.Len() = %d, want 1", orch.Backoff.Len())
+	}
+	entry, ok := orch.Backoff.Get("CB-1")
+	if !ok {
+		t.Fatal("expected backoff entry for CB-1")
+	}
+	if entry.Stage != types.StageExecute {
+		t.Errorf("backoff stage = %v, want execute", entry.Stage)
+	}
 }
 
-func (w *failingWorkspace) Cleanup(ctx context.Context, issueID string) error {
-	return nil
+func TestOrchestrator_MultiStage_HappyPath_WithArtifacts(t *testing.T) {
+	tmpDir := t.TempDir()
+	boardDir := filepath.Join(tmpDir, "board")
+	_ = os.MkdirAll(boardDir, 0o755)
+
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
+	runner := NewMockAgentRunner()
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+
+	recorder, err := diagnostics.NewRecorder(boardDir)
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	defer recorder.Close()
+	orch.SetRecorder(recorder)
+
+	events := NewEventCollector(orch.Events)
+
+	orch.poll()
+	time.Sleep(200 * time.Millisecond)
+
+	if !events.Has(EventIssueReadyForReview) {
+		t.Error("Expected IssueReadyForReview event")
+	}
+
+	// Assert all stage manifests and results exist and passed
+	for _, stage := range []types.Stage{types.StagePlan, types.StageExecute, types.StageVerify} {
+		manifest, err := recorder.LoadStageManifest("CB-1", 1, stage)
+		if err != nil {
+			t.Errorf("LoadStageManifest(%s): %v", stage, err)
+			continue
+		}
+		if manifest.Status != types.StageStatePassed {
+			t.Errorf("%s manifest status = %v, want passed", stage, manifest.Status)
+		}
+
+		result, err := recorder.LoadStageResult("CB-1", 1, stage)
+		if err != nil {
+			t.Errorf("LoadStageResult(%s): %v", stage, err)
+			continue
+		}
+		if result.Status != types.StageStatePassed {
+			t.Errorf("%s result status = %v, want passed", stage, result.Status)
+		}
+	}
+
+	// Assert review handoff exists
+	handoffPath := filepath.Join(recorder.RunsRoot(), "CB-1", "attempts", "001", "review", "handoff.md")
+	if _, err := os.Stat(handoffPath); err != nil {
+		t.Errorf("review handoff missing: %v", err)
+	}
+
+	// Assert summary is in review-ready state
+	summary, err := recorder.LoadIssueSummary("CB-1")
+	if err != nil {
+		t.Fatalf("LoadIssueSummary: %v", err)
+	}
+	if summary.ReviewState != types.ReviewStateReady {
+		t.Errorf("review state = %v, want ready", summary.ReviewState)
+	}
+	if summary.Outcome != "awaiting_review" {
+		t.Errorf("outcome = %q, want awaiting_review", summary.Outcome)
+	}
+	if summary.IssueState != types.StateInReview.BoardState() {
+		t.Errorf("issue_state = %q, want in_review", summary.IssueState)
+	}
+}
+
+func TestOrchestrator_MultiStage_ExecuteFailure_PreservesArtifacts(t *testing.T) {
+	tmpDir := t.TempDir()
+	boardDir := filepath.Join(tmpDir, "board")
+	_ = os.MkdirAll(boardDir, 0o755)
+
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
+	runner := NewMockAgentRunner()
+	runner.PerStageDoneError = map[types.Stage]error{
+		types.StageExecute: errors.New("compile error"),
+	}
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+
+	recorder, err := diagnostics.NewRecorder(boardDir)
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	defer recorder.Close()
+	orch.SetRecorder(recorder)
+
+	orch.poll()
+	time.Sleep(200 * time.Millisecond)
+
+	// Plan should have passed
+	planResult, err := recorder.LoadStageResult("CB-1", 1, types.StagePlan)
+	if err != nil {
+		t.Fatalf("LoadStageResult(plan): %v", err)
+	}
+	if planResult.Status != types.StageStatePassed {
+		t.Errorf("plan status = %v, want passed", planResult.Status)
+	}
+
+	// Execute should have failed
+	executeResult, err := recorder.LoadStageResult("CB-1", 1, types.StageExecute)
+	if err != nil {
+		t.Fatalf("LoadStageResult(execute): %v", err)
+	}
+	if executeResult.Status != types.StageStateFailed {
+		t.Errorf("execute status = %v, want failed", executeResult.Status)
+	}
+	if executeResult.FailureKind != types.StageFailureToolError {
+		t.Errorf("execute failure kind = %v, want tool_error", executeResult.FailureKind)
+	}
+
+	// Verify should not exist
+	_, err = recorder.LoadStageManifest("CB-1", 1, types.StageVerify)
+	if err == nil {
+		t.Error("verify manifest should not exist when execute fails")
+	}
+
+	// Summary should reflect retry state
+	summary, err := recorder.LoadIssueSummary("CB-1")
+	if err != nil {
+		t.Fatalf("LoadIssueSummary: %v", err)
+	}
+	if summary.IssueState != types.StateRetryQueued.BoardState() {
+		t.Errorf("issue_state = %q, want retry_queued", summary.IssueState)
+	}
+	if summary.LastError == "" {
+		t.Error("last_error should be set after failure")
+	}
 }

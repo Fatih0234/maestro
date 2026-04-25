@@ -2,6 +2,8 @@ package diagnostics
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,5 +182,78 @@ func TestRecorder_FinalizeAttempt_AwaitingReviewSetsReviewState(t *testing.T) {
 	}
 	if summary.FinishedAt == nil {
 		t.Fatal("summary finished_at should be set for awaiting_review")
+	}
+}
+
+func TestRecorder_RetryCreatesNewAttemptDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	boardDir := filepath.Join(tmpDir, "board")
+
+	recorder, err := NewRecorder(boardDir)
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	defer recorder.Close()
+
+	issue := types.Issue{
+		ID:          "CB-1",
+		Title:       "Retry Test",
+		Description: "Test retry artifacts",
+		State:       types.StateRunning,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+
+	_ = recorder.EnsureIssue(issue)
+
+	// First attempt fails
+	_, err = recorder.BeginAttempt(issue, 1, "branch", "/ws", "prompt1", "pre-status", "pre-worktree")
+	if err != nil {
+		t.Fatalf("BeginAttempt(1): %v", err)
+	}
+	retryAt := time.Now().Add(time.Minute)
+	if err := recorder.FinalizeAttempt("CB-1", 1, "retry_queued", "", &retryAt, errors.New("fail"), "post-status", "post-worktree"); err != nil {
+		t.Fatalf("FinalizeAttempt(1): %v", err)
+	}
+
+	// Second attempt succeeds
+	_, err = recorder.BeginAttempt(issue, 2, "branch", "/ws", "prompt2", "pre-status", "pre-worktree")
+	if err != nil {
+		t.Fatalf("BeginAttempt(2): %v", err)
+	}
+	if err := recorder.FinalizeAttempt("CB-1", 2, "awaiting_review", "abc123", nil, nil, "post-status", "post-worktree"); err != nil {
+		t.Fatalf("FinalizeAttempt(2): %v", err)
+	}
+
+	// Both attempt dirs should exist
+	for _, attempt := range []int{1, 2} {
+		attemptDir := filepath.Join(recorder.RunsRoot(), "CB-1", "attempts", fmt.Sprintf("%03d", attempt))
+		info, err := os.Stat(attemptDir)
+		if err != nil {
+			t.Errorf("attempt %d dir should exist: %v", attempt, err)
+			continue
+		}
+		if !info.IsDir() {
+			t.Errorf("attempt %d path should be a directory", attempt)
+		}
+		metaPath := filepath.Join(attemptDir, "meta.json")
+		if _, err := os.Stat(metaPath); err != nil {
+			t.Errorf("attempt %d meta.json should exist: %v", attempt, err)
+		}
+	}
+
+	// Verify summary reflects the latest attempt
+	summary, err := recorder.LoadIssueSummary("CB-1")
+	if err != nil {
+		t.Fatalf("LoadIssueSummary: %v", err)
+	}
+	if summary.CurrentAttempt != 2 {
+		t.Errorf("current_attempt = %d, want 2", summary.CurrentAttempt)
+	}
+	if summary.Attempts != 2 {
+		t.Errorf("attempts = %d, want 2", summary.Attempts)
+	}
+	if summary.Outcome != "awaiting_review" {
+		t.Errorf("outcome = %q, want awaiting_review", summary.Outcome)
 	}
 }

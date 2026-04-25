@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -470,5 +471,113 @@ func TestStatusGlyph(t *testing.T) {
 				t.Errorf("statusGlyph(%q, %q) = %q, want %q", tt.status, tt.spinner, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestModel_View_WithRunningAgent(t *testing.T) {
+	m := NewModel()
+	m.width = 120
+	m.height = 40
+
+	m.agents["CB-1"] = AgentRow{
+		IssueID:   "CB-1",
+		Title:     "Fix login bug",
+		Stage:     types.StageExecute,
+		Status:    "running",
+		PID:       1234,
+		Age:       "5s",
+		TokensIn:  1024,
+		TokensOut: 2048,
+		Attempt:   1,
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Fix login bug") {
+		t.Error("view should contain issue title")
+	}
+	if !strings.Contains(view, "CB-1") {
+		t.Error("view should contain issue ID")
+	}
+	if !strings.Contains(view, "Running:") {
+		t.Error("view should contain running count header")
+	}
+}
+
+func TestModel_View_ReviewQueue(t *testing.T) {
+	m := NewModel()
+	m.width = 120
+	m.height = 40
+
+	m.reviews["CB-2"] = ReviewRow{
+		IssueID:       "CB-2",
+		Title:         "Add dark mode",
+		Branch:        "opencode/CB-2",
+		WorkspacePath: "/tmp/ws/CB-2",
+		ReadyAt:       time.Now(),
+		StagesCompleted: map[types.Stage]bool{
+			types.StagePlan:    true,
+			types.StageExecute: true,
+			types.StageVerify:  true,
+		},
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Ready for Human Review") {
+		t.Error("view should show review queue header")
+	}
+	if !strings.Contains(view, "Add dark mode") {
+		t.Error("view should contain review issue title")
+	}
+	if !strings.Contains(view, "opencode/CB-2") {
+		t.Error("view should contain branch name")
+	}
+	if !strings.Contains(view, "/tmp/ws/CB-2") {
+		t.Error("view should contain workspace path")
+	}
+}
+
+func TestModel_View_BackoffQueue(t *testing.T) {
+	m := NewModel()
+	m.width = 120
+	m.height = 40
+
+	m.backoffs["CB-3"] = BackoffRow{
+		IssueID:     "CB-3",
+		Attempt:     2,
+		Stage:       types.StageExecute,
+		RetryAt:     time.Now().Add(2 * time.Minute),
+		RetryIn:     "2m",
+		Error:       "go build failed",
+		FailureKind: types.StageFailureToolError,
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Backoff Queue") {
+		t.Error("view should show backoff queue header")
+	}
+	if !strings.Contains(view, "CB-3") {
+		t.Error("view should contain backoff issue ID")
+	}
+	if !strings.Contains(view, "tool_error") {
+		// When FailureKind is set, the TUI renders the kind, not the raw error
+		t.Error("view should contain failure kind")
+	}
+}
+
+func TestModel_View_EventLog(t *testing.T) {
+	m := NewModel()
+	m.width = 120
+	m.height = 40
+
+	m.pushEvent("CB-1", "agent started", "info")
+	m.pushEvent("CB-1", "stage completed", "success")
+	m.pushEvent("CB-1", "ready for review", "success")
+
+	view := m.View()
+	if !strings.Contains(view, "[Events]") {
+		t.Error("view should show event log header")
+	}
+	if !strings.Contains(view, "agent started") {
+		t.Error("view should contain event log entries")
 	}
 }
