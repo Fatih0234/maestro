@@ -158,10 +158,11 @@ type MockTracker struct {
 	ForcedFetch []types.Issue
 
 	// Call tracking
-	ClaimCalls   int
-	ReleaseCalls int
-	UpdateCalls  int
-	UpdateState  map[string]types.IssueState
+	ClaimCalls          int
+	ReleaseCalls        int
+	UpdateCalls         int
+	SetRetryQueueCalls  int
+	UpdateState         map[string]types.IssueState
 }
 
 var _ types.IssueTracker = (*MockTracker)(nil)
@@ -290,6 +291,8 @@ func (m *MockTracker) UpdateIssueState(id string, state types.IssueState) (types
 func (m *MockTracker) SetRetryQueue(id string, retryAt time.Time) (types.Issue, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.SetRetryQueueCalls++
 
 	issue, ok := m.issues[id]
 	if !ok {
