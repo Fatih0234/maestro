@@ -979,6 +979,9 @@ func TestOrchestrator_ReconcileRunning_TimeoutEnqueuesBackoff(t *testing.T) {
 	if entry.Attempt != 2 {
 		t.Errorf("backoff attempt = %d, want 2", entry.Attempt)
 	}
+	if tracker.SetRetryQueueCalls != 1 {
+		t.Errorf("SetRetryQueueCalls = %d, want 1", tracker.SetRetryQueueCalls)
+	}
 }
 
 func TestOrchestrator_ReconcileRunning_StallEnqueuesBackoff(t *testing.T) {
@@ -1008,6 +1011,9 @@ func TestOrchestrator_ReconcileRunning_StallEnqueuesBackoff(t *testing.T) {
 	}
 	if entry.Stage != types.StageExecute {
 		t.Errorf("backoff stage = %v, want execute", entry.Stage)
+	}
+	if tracker.SetRetryQueueCalls != 1 {
+		t.Errorf("SetRetryQueueCalls = %d, want 1", tracker.SetRetryQueueCalls)
 	}
 }
 

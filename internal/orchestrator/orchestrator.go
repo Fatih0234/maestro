@@ -180,6 +180,7 @@ func (o *Orchestrator) handleTimeout(run RunState, elapsed time.Duration) {
 	// Enqueue backoff
 	attempt := run.Attempt + 1
 	entry := o.Backoff.Enqueue(issueID, attempt, run.Stage, fmt.Sprintf("timeout after %v", elapsed))
+	o.persistRetryQueue(issueID, entry.RetryAt)
 
 	o.finalizeAttempt(issueID, run.Attempt, "timed_out", &entry.RetryAt, fmt.Errorf("timeout after %v", elapsed))
 
@@ -222,6 +223,7 @@ func (o *Orchestrator) handleStall(run RunState, lastEventAge time.Duration) {
 	// Enqueue backoff
 	attempt := run.Attempt + 1
 	entry := o.Backoff.Enqueue(issueID, attempt, run.Stage, fmt.Sprintf("stall: no event for %v", lastEventAge))
+	o.persistRetryQueue(issueID, entry.RetryAt)
 
 	o.finalizeAttempt(issueID, run.Attempt, "stalled", &entry.RetryAt, fmt.Errorf("stall: no event for %v", lastEventAge))
 
@@ -489,6 +491,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 
 				nextAttempt := attempt + 1
 				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, fmt.Sprintf("context cancelled before %s: %v", stage, err))
+				o.persistRetryQueue(issueID, entry.RetryAt)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
 				o.emit(EventStageFailed, issueID, StageFailedPayload{
@@ -554,6 +557,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 
 				nextAttempt := attempt + 1
 				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, fmt.Sprintf("stage %s failed: %v", stage, err))
+				o.persistRetryQueue(issueID, entry.RetryAt)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
 				o.emit(EventStageFailed, issueID, StageFailedPayload{
@@ -593,6 +597,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				failureKind := o.classifyStageFailure(result.Error, stage)
 
 				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, errMsg)
+				o.persistRetryQueue(issueID, entry.RetryAt)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, result.Error)
 
 				o.emit(EventStageFailed, issueID, StageFailedPayload{
@@ -654,6 +659,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 			o.State.Remove(issueID)
 
 			entry := o.Backoff.Enqueue(issueID, nextAttempt, types.StagePlan, fmt.Sprintf("review handoff failed: %v", err))
+			o.persistRetryQueue(issueID, entry.RetryAt)
 			o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
 			o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
@@ -698,6 +704,26 @@ func (o *Orchestrator) removeRunning(issueID string) {
 	o.mu.Unlock()
 }
 
+// persistRetryQueue writes the retry timestamp to the tracker.
+// This is best-effort: the in-memory backoff manager is the source of truth
+// for dispatch. If the tracker fails to persist (network error, disk full,
+// etc.), the retry still happens at the scheduled time but won't be visible
+// to external systems (e.g., no GitHub label/comment).
+func (o *Orchestrator) persistRetryQueue(issueID string, retryAt time.Time) {
+	if _, err := o.Tracker.SetRetryQueue(issueID, retryAt); err != nil {
+		// Best-effort: log via event channel if space, otherwise swallow.
+		select {
+		case o.Events <- types.OrchestratorEvent{
+			Type:      "retry_queue_persist_failed",
+			IssueID:   issueID,
+			Timestamp: time.Now().UTC(),
+			Payload:   map[string]string{"error": err.Error()},
+		}:
+		default:
+		}
+	}
+}
+
 // isClosed reports whether shutdown has been requested or completed.
 func (o *Orchestrator) isClosed() bool {
 	o.mu.Lock()
@@ -718,6 +744,7 @@ func (o *Orchestrator) handleStartError(issue types.Issue, attempt int, startSta
 
 	// Enqueue for retry
 	entry := o.Backoff.Enqueue(issue.ID, attempt, startStage, fmt.Sprintf("%s: %v", reason, err))
+	o.persistRetryQueue(issue.ID, entry.RetryAt)
 
 	if o.Recorder != nil {
 		preflightStatus, preflightWorktreeList := o.captureGitState(o.workspaceBaseDir())
