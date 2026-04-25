@@ -102,10 +102,15 @@ func (m *Manager) Create(ctx context.Context, issue types.Issue) (string, error)
 
 	// Check if directory exists but not tracked
 	if info, err := os.Stat(workspacePath); err == nil && info.IsDir() {
-		m.mu.Lock()
-		m.active[issue.ID] = workspacePath
-		m.mu.Unlock()
-		return workspacePath, nil
+		// Verify it is a valid git worktree, not an orphaned/prunable one.
+		if m.isValidWorktree(workspacePath) {
+			m.mu.Lock()
+			m.active[issue.ID] = workspacePath
+			m.mu.Unlock()
+			return workspacePath, nil
+		}
+		// Invalid / prunable worktree — remove and recreate below.
+		_ = os.RemoveAll(workspacePath)
 	}
 
 	// Create parent directory
@@ -330,6 +335,40 @@ func (m *Manager) lockIssue(issueID string) func() {
 	mu := lock.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
+}
+
+// isValidWorktree checks whether a directory is a healthy git worktree.
+// It returns false for orphaned/prunable worktrees (missing .git file,
+// broken gitdir link, or worktree marked prunable by git).
+func (m *Manager) isValidWorktree(path string) bool {
+	// Must have a .git file (worktrees use a gitfile, not a .git directory)
+	gitFile := filepath.Join(path, ".git")
+	info, err := os.Stat(gitFile)
+	if err != nil || info.IsDir() {
+		return false
+	}
+
+	// The gitfile must contain a valid gitdir: line pointing to an existing path
+	data, err := os.ReadFile(gitFile)
+	if err != nil {
+		return false
+	}
+	const prefix = "gitdir: "
+	line := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(line, prefix) {
+		return false
+	}
+	gitDir := strings.TrimSpace(line[len(prefix):])
+	if _, err := os.Stat(gitDir); err != nil {
+		return false
+	}
+
+	// Ask git whether this path is known as a valid worktree
+	output, err := m.runGit(context.Background(), "worktree", "list", "--porcelain")
+	if err != nil {
+		return false
+	}
+	return strings.Contains(output, path)
 }
 
 // runGit executes a git command in the base directory.
