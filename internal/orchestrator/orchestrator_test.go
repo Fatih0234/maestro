@@ -177,6 +177,19 @@ func (c *EventCollector) GetByIssue(issueID string) []types.OrchestratorEvent {
 	return result
 }
 
+// WaitFor polls until the collector has received an event of the given type
+// or the timeout expires. It returns true if the event was found.
+func (c *EventCollector) WaitFor(eventType string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if c.Has(eventType) {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
 // --- BackoffManager Tests ---
 
 func TestBackoffManager_DefaultMaxDelay(t *testing.T) {
@@ -1008,10 +1021,8 @@ func TestOrchestrator_MultiStage_HappyPath_WithArtifacts(t *testing.T) {
 	events := NewEventCollector(orch.Events)
 
 	orch.poll()
-	time.Sleep(200 * time.Millisecond)
-
-	if !events.Has(EventIssueReadyForReview) {
-		t.Error("Expected IssueReadyForReview event")
+	if !events.WaitFor(EventIssueReadyForReview, 2*time.Second) {
+		t.Fatal("Expected IssueReadyForReview event")
 	}
 
 	// Assert all stage manifests and results exist and passed
@@ -1079,8 +1090,12 @@ func TestOrchestrator_MultiStage_ExecuteFailure_PreservesArtifacts(t *testing.T)
 	defer recorder.Close()
 	orch.SetRecorder(recorder)
 
+	events := NewEventCollector(orch.Events)
+
 	orch.poll()
-	time.Sleep(200 * time.Millisecond)
+	if !events.WaitFor(EventIssueRetrying, 2*time.Second) {
+		t.Fatal("Expected IssueRetrying event after execute failure")
+	}
 
 	// Plan should have passed
 	planResult, err := recorder.LoadStageResult("CB-1", 1, types.StagePlan)

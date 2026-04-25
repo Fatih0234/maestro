@@ -99,13 +99,29 @@ func TestSmoke_OneIssue_ReachesInReview(t *testing.T) {
 	orch := orchestrator.New(cfg, tr, ws, fakeRunner)
 	orch.SetRecorder(recorder)
 
-	// Run orchestrator long enough for the pipeline to finish, then stop
+	// Run orchestrator in background and poll until the issue reaches in_review.
+	errCh := make(chan error, 1)
 	go func() {
-		time.Sleep(500 * time.Millisecond)
-		orch.Stop()
+		errCh <- orch.Run()
 	}()
-	if err := orch.Run(); err != nil {
-		t.Fatalf("Run: %v", err)
+
+	pollStart := time.Now()
+	for time.Since(pollStart) < 5*time.Second {
+		updated, _ := tr.GetIssue(issue.ID)
+		if updated.State == types.StateInReview {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	orch.Stop()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after Stop")
 	}
 
 	// Verify issue state on tracker
@@ -213,12 +229,28 @@ func TestSmoke_OneIssue_ApprovalToDone(t *testing.T) {
 	orch.SetRecorder(recorder)
 
 	// Run to in_review
+	errCh := make(chan error, 1)
 	go func() {
-		time.Sleep(500 * time.Millisecond)
-		orch.Stop()
+		errCh <- orch.Run()
 	}()
-	if err := orch.Run(); err != nil {
-		t.Fatalf("Run: %v", err)
+
+	pollStart := time.Now()
+	for time.Since(pollStart) < 5*time.Second {
+		updated, _ := tr.GetIssue(issue.ID)
+		if updated.State == types.StateInReview {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	orch.Stop()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after Stop")
 	}
 
 	// Simulate human approval by writing the decision artifact directly

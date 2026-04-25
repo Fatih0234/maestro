@@ -24,6 +24,10 @@ type FakeRunner struct {
 	StopCalls  int
 	CloseCalls int
 	Started    []*FakeProcess
+
+	// cancels holds cancel functions for in-flight goroutines so Stop can
+	// interrupt them.
+	cancels map[string]context.CancelFunc
 }
 
 // StageScript defines the behavior for one stage run.
@@ -52,6 +56,7 @@ var _ types.AgentRunner = (*FakeRunner)(nil)
 func NewFakeRunner() *FakeRunner {
 	return &FakeRunner{
 		Scripts: make(map[string]*StageScript),
+		cancels: make(map[string]context.CancelFunc),
 	}
 }
 
@@ -91,7 +96,10 @@ func (f *FakeRunner) Start(ctx context.Context, issue types.Issue, workspace, pr
 	}
 	f.Started = append(f.Started, proc)
 
-	go f.runScript(ctx, script, events, done)
+	procCtx, cancel := context.WithCancel(ctx)
+	f.cancels[proc.SessionID] = cancel
+
+	go f.runScript(procCtx, proc.SessionID, script, events, done)
 
 	return &types.AgentProcess{
 		PID:       proc.PID,
@@ -101,7 +109,13 @@ func (f *FakeRunner) Start(ctx context.Context, issue types.Issue, workspace, pr
 	}, nil
 }
 
-func (f *FakeRunner) runScript(ctx context.Context, script *StageScript, events chan<- types.AgentEvent, done chan<- error) {
+func (f *FakeRunner) runScript(ctx context.Context, sessionID string, script *StageScript, events chan<- types.AgentEvent, done chan<- error) {
+	defer func() {
+		f.mu.Lock()
+		delete(f.cancels, sessionID)
+		f.mu.Unlock()
+	}()
+
 	if script != nil && script.Delay > 0 {
 		select {
 		case <-time.After(script.Delay):
@@ -126,13 +140,13 @@ func (f *FakeRunner) runScript(ctx context.Context, script *StageScript, events 
 		}
 	}
 
-	close(events)
 	var err error
 	if script != nil {
 		err = script.DoneErr
 	}
 	done <- err
 	close(done)
+	close(events)
 }
 
 // Stop implements types.AgentRunner.
@@ -140,6 +154,9 @@ func (f *FakeRunner) Stop(proc *types.AgentProcess) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.StopCalls++
+	if cancel, ok := f.cancels[proc.SessionID]; ok {
+		cancel()
+	}
 	return nil
 }
 
@@ -148,5 +165,9 @@ func (f *FakeRunner) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.CloseCalls++
+	for _, cancel := range f.cancels {
+		cancel()
+	}
+	f.cancels = make(map[string]context.CancelFunc)
 	return nil
 }
