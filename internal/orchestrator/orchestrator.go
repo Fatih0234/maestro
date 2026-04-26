@@ -194,7 +194,7 @@ func (o *Orchestrator) handleTimeout(run RunState, elapsed time.Duration) {
 	})
 
 	// Update phase to timed out
-	o.State.UpdatePhase(issueID, types.PhaseTimedOut)
+	o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseTimedOut })
 
 	// Remove from active state (will be retried via backoff)
 	o.State.Remove(issueID)
@@ -237,7 +237,7 @@ func (o *Orchestrator) handleStall(run RunState, lastEventAge time.Duration) {
 	})
 
 	// Update phase to stalled
-	o.State.UpdatePhase(issueID, types.PhaseStalled)
+	o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseStalled })
 
 	// Remove from active state (will be retried via backoff)
 	o.State.Remove(issueID)
@@ -432,13 +432,13 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 		// Intercept runner events to update orchestrator state and emit to the TUI.
 		wrappedEmit := func(event types.OrchestratorEvent) {
 			if event.IssueID == issueID {
-				o.State.UpdateLastEvent(issueID)
+				o.State.Mutate(issueID, func(r *RunState) { r.LastEventAt = time.Now() })
 				switch event.Type {
 				case pipeline.EventTokensUpdated:
 					if payload, ok := event.Payload.(map[string]int64); ok {
 						totalTokensIn += payload["tokens_in"]
 						totalTokensOut += payload["tokens_out"]
-						o.State.UpdateTokens(issueID, totalTokensIn, totalTokensOut)
+						o.State.Mutate(issueID, func(r *RunState) { r.TokensIn = totalTokensIn; r.TokensOut = totalTokensOut })
 						o.emit(EventTokensUpdated, issueID, TokensUpdatedPayload{
 							IssueID:   issueID,
 							TokensIn:  totalTokensIn,
@@ -458,7 +458,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 					if payload, ok := event.Payload.(map[string]interface{}); ok {
 						pid, _ := payload["pid"].(int)
 						sessionID, _ := payload["session_id"].(string)
-							o.State.SetProcess(issueID, &types.AgentProcess{PID: pid, SessionID: sessionID})
+						o.State.Mutate(issueID, func(r *RunState) { r.Process = &types.AgentProcess{PID: pid, SessionID: sessionID} })
 						if o.Recorder != nil {
 							_ = o.Recorder.UpdateAttemptLaunchInfo(issueID, attempt, pid, sessionID, "")
 						}
@@ -492,7 +492,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 
 				// Context cancelled between stages — treat as a failure so state is cleaned up.
 				err := runCtx.Err()
-				o.State.UpdatePhase(issueID, types.PhaseFailed)
+				o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseFailed })
 				o.State.Remove(issueID)
 
 				nextAttempt := attempt + 1
@@ -534,7 +534,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				return
 			}
 
-			o.State.UpdateStage(issueID, stage)
+			o.State.Mutate(issueID, func(r *RunState) { r.Stage = stage })
 
 			stageAgent := ""
 			if o.Config.OpenCode != nil {
@@ -558,7 +558,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 
 			if err != nil {
 				// Workspace or agent start failed.
-				o.State.UpdatePhase(issueID, types.PhaseFailed)
+				o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseFailed })
 				o.State.Remove(issueID)
 
 				nextAttempt := attempt + 1
@@ -592,7 +592,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 			if !result.Success {
 				// Stage runtime failure.
 				nextAttempt := attempt + 1
-				o.State.UpdatePhase(issueID, types.PhaseFailed)
+				o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseFailed })
 				o.State.Remove(issueID)
 
 				var errMsg string
@@ -639,7 +639,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 		}
 
 		// All stages passed — hand off to human review.
-		o.State.UpdatePhase(issueID, types.PhaseSucceeded)
+		o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseSucceeded })
 
 		handoffBranch := branchName
 		handoffWorkspace := workspacePath
@@ -661,7 +661,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 
 		if _, err := o.Tracker.UpdateIssueState(issueID, types.StateInReview); err != nil {
 			nextAttempt := attempt + 1
-			o.State.UpdatePhase(issueID, types.PhaseFailed)
+			o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseFailed })
 			o.State.Remove(issueID)
 
 			entry := o.Backoff.Enqueue(issueID, nextAttempt, types.StagePlan, fmt.Sprintf("review handoff failed: %v", err))

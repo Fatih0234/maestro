@@ -56,54 +56,14 @@ func (s *StateManager) Add(issueID string, issue types.Issue, attempt int, stage
 	}
 }
 
-// UpdateStage updates the pipeline stage for a run.
-func (s *StateManager) UpdateStage(issueID string, stage types.Stage) {
+// Mutate applies fn to the run state for the given issueID while holding the write lock.
+// If the run does not exist, fn is not called.
+func (s *StateManager) Mutate(issueID string, fn func(*RunState)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if run, ok := s.runs[issueID]; ok {
-		run.Stage = stage
-	}
-}
-
-// UpdatePhase updates the phase for a run.
-func (s *StateManager) UpdatePhase(issueID string, phase types.RunPhase) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if run, ok := s.runs[issueID]; ok {
-		run.Phase = phase
-	}
-}
-
-// UpdateTokens updates token counts for a run.
-func (s *StateManager) UpdateTokens(issueID string, tokensIn, tokensOut int64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if run, ok := s.runs[issueID]; ok {
-		run.TokensIn = tokensIn
-		run.TokensOut = tokensOut
-	}
-}
-
-// UpdateLastEvent updates the last event timestamp.
-func (s *StateManager) UpdateLastEvent(issueID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if run, ok := s.runs[issueID]; ok {
-		run.LastEventAt = time.Now()
-	}
-}
-
-// SetProcess sets the agent process for a run.
-func (s *StateManager) SetProcess(issueID string, proc *types.AgentProcess) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if run, ok := s.runs[issueID]; ok {
-		run.Process = proc
+		fn(run)
 	}
 }
 
@@ -146,5 +106,3 @@ func (s *StateManager) GetAll() []RunState {
 	}
 	return result
 }
-
-

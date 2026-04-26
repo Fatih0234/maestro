@@ -53,50 +53,34 @@ func TestStateManager_Add(t *testing.T) {
 	}
 }
 
-func TestStateManager_UpdatePhase(t *testing.T) {
+func TestStateManager_Mutate(t *testing.T) {
 	s := NewStateManager()
 
 	issue := makeTestIssue("CB-1", "Test Issue CB-1")
 	proc := makeTestProcess("sess-1")
 	s.Add("CB-1", issue, 1, types.StageExecute, proc)
 
-	s.UpdatePhase("CB-1", types.PhaseStreamingTurn)
+	s.Mutate("CB-1", func(r *RunState) { r.Phase = types.PhaseStreamingTurn })
 
 	run, _ := s.Get("CB-1")
 	if run.Phase != types.PhaseStreamingTurn {
 		t.Errorf("Phase = %v, want PhaseStreamingTurn", run.Phase)
 	}
-}
 
-func TestStateManager_UpdateTokens(t *testing.T) {
-	s := NewStateManager()
+	s.Mutate("CB-1", func(r *RunState) { r.TokensIn = 500; r.TokensOut = 1000 })
 
-	issue := makeTestIssue("CB-1", "Test Issue CB-1")
-	proc := makeTestProcess("sess-1")
-	s.Add("CB-1", issue, 1, types.StageExecute, proc)
-
-	s.UpdateTokens("CB-1", 500, 1000)
-
-	run, _ := s.Get("CB-1")
+	run, _ = s.Get("CB-1")
 	if run.TokensIn != 500 {
 		t.Errorf("TokensIn = %d, want 500", run.TokensIn)
 	}
 	if run.TokensOut != 1000 {
 		t.Errorf("TokensOut = %d, want 1000", run.TokensOut)
 	}
-}
-
-func TestStateManager_UpdateLastEvent(t *testing.T) {
-	s := NewStateManager()
-
-	issue := makeTestIssue("CB-1", "Test Issue CB-1")
-	proc := makeTestProcess("sess-1")
-	s.Add("CB-1", issue, 1, types.StageExecute, proc)
 
 	time.Sleep(10 * time.Millisecond)
-	s.UpdateLastEvent("CB-1")
+	s.Mutate("CB-1", func(r *RunState) { r.LastEventAt = time.Now() })
 
-	run, _ := s.Get("CB-1")
+	run, _ = s.Get("CB-1")
 	if run.LastEventAt.IsZero() {
 		t.Error("LastEventAt is zero")
 	}
@@ -179,14 +163,13 @@ func TestStateManager_ConcurrentAccess(t *testing.T) {
 	}
 }
 
-func TestStateManager_UpdateNonExistent(t *testing.T) {
+func TestStateManager_MutateNonExistent(t *testing.T) {
 	s := NewStateManager()
 
 	// Should not panic
-	s.UpdatePhase("CB-999", types.PhaseSucceeded)
-	s.UpdateTokens("CB-999", 100, 200)
-	s.UpdateLastEvent("CB-999")
-
+	s.Mutate("CB-999", func(r *RunState) { r.Phase = types.PhaseSucceeded })
+	s.Mutate("CB-999", func(r *RunState) { r.TokensIn = 100; r.TokensOut = 200 })
+	s.Mutate("CB-999", func(r *RunState) { r.LastEventAt = time.Now() })
 }
 
 func TestStateManager_RemoveNonExistent(t *testing.T) {
@@ -209,12 +192,11 @@ func TestStateManager_ConcurrentReadWrite(t *testing.T) {
 			defer wg.Done()
 			_, _ = s.Get("CB-1")
 			_ = s.GetAll()
-
 		}()
 		go func(i int) {
 			defer wg.Done()
-			s.UpdateLastEvent("CB-1")
-			s.UpdateTokens("CB-1", int64(i), int64(i))
+			s.Mutate("CB-1", func(r *RunState) { r.LastEventAt = time.Now() })
+			s.Mutate("CB-1", func(r *RunState) { r.TokensIn = int64(i); r.TokensOut = int64(i) })
 		}(i)
 	}
 	wg.Wait()
