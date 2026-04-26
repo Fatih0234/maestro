@@ -253,6 +253,57 @@ func (t *GitHubTracker) SetRetryQueue(id string, retryAt time.Time) (types.Issue
 	return issue, nil
 }
 
+// IssuesInReview returns all open GitHub issues with the review label.
+func (t *GitHubTracker) IssuesInReview() ([]types.Issue, error) {
+	var all []githubIssue
+	path := "/issues?state=open&per_page=100"
+	if err := t.get(path, &all); err != nil {
+		return nil, fmt.Errorf("fetching issues: %w", err)
+	}
+
+	var result []types.Issue
+	for _, gi := range all {
+		if gi.PullRequest != nil {
+			continue
+		}
+
+		hasReview := false
+		for _, l := range gi.Labels {
+			if l.Name == t.reviewLabel() {
+				hasReview = true
+				break
+			}
+		}
+		if !hasReview {
+			continue
+		}
+
+		result = append(result, t.toTypesIssue(gi, types.StateInReview))
+	}
+
+	return result, nil
+}
+
+// ListAllIssues returns all open GitHub issues (excluding pull requests).
+func (t *GitHubTracker) ListAllIssues() ([]types.Issue, error) {
+	var all []githubIssue
+	path := "/issues?state=open&per_page=100"
+	if err := t.get(path, &all); err != nil {
+		return nil, fmt.Errorf("fetching issues: %w", err)
+	}
+
+	var result []types.Issue
+	for _, gi := range all {
+		if gi.PullRequest != nil {
+			continue
+		}
+		state := t.toIssueState(&gi)
+		result = append(result, t.toTypesIssue(gi, state))
+	}
+
+	return result, nil
+}
+
 // --- State-specific update helpers ---
 
 func (t *GitHubTracker) updateToUnclaimed(num int) (types.Issue, error) {

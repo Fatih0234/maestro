@@ -107,6 +107,16 @@ func (s *StateManager) SetError(issueID string, err string) {
 	}
 }
 
+// SetProcess sets the agent process for a run.
+func (s *StateManager) SetProcess(issueID string, proc *types.AgentProcess) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if run, ok := s.runs[issueID]; ok {
+		run.Process = proc
+	}
+}
+
 // Get returns a copy of a run state.
 func (s *StateManager) Get(issueID string) (RunState, bool) {
 	s.mu.RLock()

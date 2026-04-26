@@ -161,6 +161,11 @@ type IssueTracker interface {
 	// SetRetryQueue marks an issue as waiting for retry. Not all trackers
 	// may support this; those that don't should return an error.
 	SetRetryQueue(id string, retryAt time.Time) (Issue, error)
+	// IssuesInReview returns all issues currently awaiting human review.
+	IssuesInReview() ([]Issue, error)
+	// ListAllIssues returns all known issues regardless of state.
+	// For remote trackers this may be limited to open/non-archived issues.
+	ListAllIssues() ([]Issue, error)
 }
 
 // OrchestratorEvent represents a high-level event in the orchestrator lifecycle.

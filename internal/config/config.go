@@ -246,13 +246,6 @@ func (c *Config) Validate() error {
 		if c.OpenCode.BinaryPath == "" {
 			return fmt.Errorf("opencode.binary_path is required")
 		}
-		// If profile is specified, check it exists
-		if c.OpenCode.Profile != "" {
-			profilePath := os.ExpandEnv("$HOME/.config/opencode/profiles/") + c.OpenCode.Profile + "/opencode.jsonc"
-			if _, err := os.Stat(profilePath); err != nil {
-				return fmt.Errorf("opencode profile %q not found at %s: %w", c.OpenCode.Profile, profilePath, err)
-			}
-		}
 	case "codex":
 		if c.Codex == nil {
 			return fmt.Errorf("codex config is required when agent.type is codex")

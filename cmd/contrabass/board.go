@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -47,32 +46,19 @@ func boardList(args []string) error {
 		return err
 	}
 
-	cfg, tr, _, recorder, err := buildDeps(*configPath)
+	_, tr, _, recorder, err := buildDeps(*configPath)
 	if err != nil {
 		return err
 	}
 	defer recorder.Close()
 
-	boardDir := cfg.Tracker.BoardDir
-	if boardDir == "" {
-		boardDir = ".contrabass/board"
-	}
-
-	entries, err := os.ReadDir(filepath.Join(boardDir, "issues"))
+	allIssues, err := tr.ListAllIssues()
 	if err != nil {
-		return fmt.Errorf("reading issues directory: %w", err)
+		return fmt.Errorf("listing issues: %w", err)
 	}
 
 	var issues []types.Issue
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		issue, err := tr.GetIssue(id)
-		if err != nil {
-			return fmt.Errorf("loading issue %q: %w", id, err)
-		}
+	for _, issue := range allIssues {
 		if *showAll {
 			issues = append(issues, issue)
 			continue

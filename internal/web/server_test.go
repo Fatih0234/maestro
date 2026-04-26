@@ -88,36 +88,6 @@ func TestHandleStateMethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestHandleRefresh(t *testing.T) {
-	provider := &mockSnapshotProvider{}
-	hub := NewHub()
-	srv := NewServer(":0", provider, hub, nil, 0)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", nil)
-	rec := httptest.NewRecorder()
-
-	srv.handleRefresh(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected status 202, got %d", rec.Code)
-	}
-}
-
-func TestHandleRefreshMethodNotAllowed(t *testing.T) {
-	provider := &mockSnapshotProvider{}
-	hub := NewHub()
-	srv := NewServer(":0", provider, hub, nil, 0)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/refresh", nil)
-	rec := httptest.NewRecorder()
-
-	srv.handleRefresh(rec, req)
-
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("expected status 405, got %d", rec.Code)
-	}
-}
-
 func TestHandleEventsStreamsSnapshotAndEvents(t *testing.T) {
 	provider := &mockSnapshotProvider{
 		snapshot: Snapshot{

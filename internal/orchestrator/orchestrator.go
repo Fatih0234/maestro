@@ -458,6 +458,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 					if payload, ok := event.Payload.(map[string]interface{}); ok {
 						pid, _ := payload["pid"].(int)
 						sessionID, _ := payload["session_id"].(string)
+							o.State.SetProcess(issueID, &types.AgentProcess{PID: pid, SessionID: sessionID})
 						if o.Recorder != nil {
 							_ = o.Recorder.UpdateAttemptLaunchInfo(issueID, attempt, pid, sessionID, "")
 						}
@@ -734,42 +735,6 @@ func (o *Orchestrator) isClosed() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.closed
-}
-
-// handleStartError handles errors during startRun.
-func (o *Orchestrator) handleStartError(issue types.Issue, attempt int, startStage types.Stage, err error, reason string) {
-	issueID := issue.ID
-	o.State.SetError(issue.ID, err.Error())
-	o.State.UpdatePhase(issue.ID, types.PhaseFailed)
-	o.State.Remove(issue.ID)
-
-	if startStage == "" {
-		startStage = types.StagePlan
-	}
-
-	// Enqueue for retry
-	entry := o.Backoff.Enqueue(issue.ID, attempt, startStage, fmt.Sprintf("%s: %v", reason, err))
-	o.persistRetryQueue(issue.ID, entry.RetryAt)
-
-	if o.Recorder != nil {
-		preflightStatus, preflightWorktreeList := o.captureGitState(o.workspaceBaseDir())
-		finalCommit := o.captureCommit(o.ctx, o.workspacePath(issueID))
-		_ = o.Recorder.FinalizeAttempt(issueID, attempt, "retry_queued", finalCommit, &entry.RetryAt, err, preflightStatus, preflightWorktreeList)
-	}
-
-	o.emit(EventAgentFinished, issue.ID, AgentFinishedPayload{
-		IssueID: issue.ID,
-		Success: false,
-		Error:   err.Error(),
-	})
-	o.emit(EventIssueRetrying, issue.ID, IssueRetryingPayload{
-		IssueID:     issue.ID,
-		Attempt:     attempt,
-		Stage:       startStage,
-		RetryAt:     entry.RetryAt,
-		Error:       fmt.Sprintf("%s: %v", reason, err),
-		FailureKind: o.classifyStageFailure(err, startStage),
-	})
 }
 
 // buildPrompt builds the prompt from the template using issue data.

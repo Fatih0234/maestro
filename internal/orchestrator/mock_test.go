@@ -306,6 +306,32 @@ func (m *MockTracker) SetRetryQueue(id string, retryAt time.Time) (types.Issue, 
 	return issue, nil
 }
 
+// IssuesInReview implements IssueTracker.IssuesInReview
+func (m *MockTracker) IssuesInReview() ([]types.Issue, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make([]types.Issue, 0)
+	for _, issue := range m.issues {
+		if issue.State == types.StateInReview {
+			result = append(result, issue)
+		}
+	}
+	return result, nil
+}
+
+// ListAllIssues implements IssueTracker.ListAllIssues
+func (m *MockTracker) ListAllIssues() ([]types.Issue, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make([]types.Issue, 0, len(m.issues))
+	for _, issue := range m.issues {
+		result = append(result, issue)
+	}
+	return result, nil
+}
+
 // ClaimCount returns how many times an issue was claimed.
 func (m *MockTracker) ClaimCount(id string) int {
 	m.mu.Lock()

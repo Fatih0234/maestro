@@ -271,8 +271,8 @@ func (a *snapshotAdapter) Snapshot() web.Snapshot {
 	}
 
 	review := make([]web.ReviewSnapshot, 0)
-	if lt, ok := a.orch.Tracker.(*tracker.LocalTracker); ok {
-		issues, err := lt.IssuesInReview()
+	if a.orch.Tracker != nil {
+		issues, err := a.orch.Tracker.IssuesInReview()
 		if err != nil {
 			log.Printf("[web] failed to get issues in review: %v", err)
 		} else {
@@ -284,8 +284,6 @@ func (a *snapshotAdapter) Snapshot() web.Snapshot {
 				})
 			}
 		}
-	} else if a.orch.Tracker != nil {
-		log.Printf("[web] tracker type %T does not implement IssuesInReview; review list will be empty", a.orch.Tracker)
 	}
 
 	return web.Snapshot{

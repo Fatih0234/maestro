@@ -47,11 +47,8 @@ func TestValidate_OpenCodeProfileNotFound(t *testing.T) {
 	}
 
 	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for non-existent profile, got nil")
-	}
-	if !contains(err.Error(), "not found") {
-		t.Errorf("error should mention 'not found', got: %v", err)
+	if err != nil {
+		t.Fatalf("expected no error for non-existent profile at config parse time (validated at runtime), got: %v", err)
 	}
 }
 

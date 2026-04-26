@@ -147,25 +147,6 @@ func TestIntegration_EventsEndpoint(t *testing.T) {
 	}
 }
 
-// TestIntegration_RefreshEndpoint verifies POST /api/v1/refresh returns 202.
-func TestIntegration_RefreshEndpoint(t *testing.T) {
-	provider := &mockSnapshotProvider{}
-	hub := NewHub()
-	srv := NewServer("127.0.0.1:0", provider, hub, nil, 0)
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
-
-	resp, err := http.Post(ts.URL+"/api/v1/refresh", "", nil)
-	if err != nil {
-		t.Fatalf("POST /api/v1/refresh: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("expected status 202, got %d", resp.StatusCode)
-	}
-}
-
 // TestIntegration_DashboardEndpoint verifies the root path serves HTML.
 func TestIntegration_DashboardEndpoint(t *testing.T) {
 	provider := &mockSnapshotProvider{}

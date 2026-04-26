@@ -5,7 +5,6 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -72,12 +71,13 @@ type Snapshot struct {
 
 // Server is a lightweight HTTP API for the orchestrator.
 type Server struct {
-	addr             string
-	snapshotProvider SnapshotProvider
-	hub              *Hub
-	eventSource      <-chan types.OrchestratorEvent
-	maxConcurrency   int
-	httpServer       *http.Server
+	addr              string
+	snapshotProvider  SnapshotProvider
+	hub               *Hub
+	eventSource       <-chan types.OrchestratorEvent
+	maxConcurrency    int
+	httpServer        *http.Server
+	cancelEventBridge context.CancelFunc
 }
 
 // NewServer creates a new web server.
@@ -94,10 +94,18 @@ func NewServer(addr string, provider SnapshotProvider, hub *Hub, eventSource <-c
 // Handler returns the HTTP handler for the server.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/state", s.handleState)
+
+	// Non-SSE handlers wrapped with timeout to prevent slow/hung clients
+	// from holding connections open indefinitely. SSE stream remains
+	// unbounded because heartbeat and flush keep it alive.
+	stateHandler := http.TimeoutHandler(http.HandlerFunc(s.handleState), 30*time.Second, "request timeout")
+	mux.Handle("/api/v1/state", stateHandler)
+
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
-	mux.HandleFunc("/api/v1/refresh", s.handleRefresh)
-	mux.HandleFunc("/", s.handleDashboard)
+
+	dashHandler := http.TimeoutHandler(http.HandlerFunc(s.handleDashboard), 30*time.Second, "request timeout")
+	mux.Handle("/", dashHandler)
+
 	return mux
 }
 
@@ -139,8 +147,18 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // StartEventBridge starts a goroutine that forwards orchestrator events to the hub.
 // The goroutine exits when ctx is cancelled or the event source is closed.
+// Calling StartEventBridge again cancels any previously-started bridge goroutine
+// so rapid restarts do not leak goroutines.
 func (s *Server) StartEventBridge(ctx context.Context) {
+	if s.cancelEventBridge != nil {
+		s.cancelEventBridge()
+	}
+
+	bridgeCtx, cancel := context.WithCancel(ctx)
+	s.cancelEventBridge = cancel
+
 	go func() {
+		defer cancel()
 		for {
 			select {
 			case event, ok := <-s.eventSource:
@@ -153,7 +171,7 @@ func (s *Server) StartEventBridge(ctx context.Context) {
 					continue
 				}
 				s.hub.Broadcast(webEvent)
-			case <-ctx.Done():
+			case <-bridgeCtx.Done():
 				return
 			}
 		}
@@ -232,16 +250,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-}
-
-func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprint(w, "{\"status\":\"accepted\"}\n")
 }
 
 func toWebEvent(event types.OrchestratorEvent) (WebEvent, error) {
