@@ -35,5 +35,5 @@ Labels: {{ issue.labels }}
 3. Leave your implementation **ready for human review** in this issue worktree
    - Do **not** merge into `main`
    - Do **not** delete or clean up the worktree
-   - A commit is optional; if created, keep it scoped to this issue branch
+   - Do NOT commit, stage, or run any git commands — the human reviewer will commit manually
 4. Finish with a concise summary of what changed and how to verify it manually

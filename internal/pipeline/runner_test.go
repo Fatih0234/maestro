@@ -359,7 +359,7 @@ func TestRunner_Run_NoAutoCommitInPlanStage(t *testing.T) {
 	}
 }
 
-func TestRunner_Run_AutoCommitInExecuteStage(t *testing.T) {
+func TestRunner_Run_ExecuteStageLeavesUncommittedChanges(t *testing.T) {
 	tmpDir := t.TempDir()
 	initGitRepo(t, tmpDir)
 	ws := workspace.New(workspace.Config{BaseDir: tmpDir, BranchPrefix: "test/"})
@@ -381,13 +381,14 @@ func TestRunner_Run_AutoCommitInExecuteStage(t *testing.T) {
 		t.Fatal("expected success")
 	}
 
-	// There should be a new commit because execute stage auto-commits
+	// Execute stage should NOT auto-commit — changes remain uncommitted for human review.
 	gitLog := runner.gitOutput(context.Background(), result.WorkspacePath, "log", "--oneline")
-	if !strings.Contains(gitLog, "feat(CB-1)") {
-		t.Error("execute stage should auto-commit changes")
+	if strings.Contains(gitLog, "feat(CB-1)") {
+		t.Error("execute stage should not auto-commit changes")
 	}
-	if result.FinalCommit == "" {
-		t.Error("execute stage should produce a final commit hash")
+	status := runner.gitOutput(context.Background(), result.WorkspacePath, "status", "--short")
+	if !strings.Contains(status, "dirty.txt") {
+		t.Error("execute stage should leave uncommitted changes for human review")
 	}
 }
 

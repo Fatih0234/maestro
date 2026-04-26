@@ -194,14 +194,9 @@ monitor:
 	finalCommit := r.captureCommit(ctx, workspacePath)
 	diff := r.captureDiff(ctx, workspacePath)
 
-	// 6b. Programmatic commit — only allowed in execute stage so plan/verify
-	// stages don't accidentally commit partial or review-only changes.
-	if runErr == nil && stage == types.StageExecute && r.hasUncommittedChanges(workspacePath) {
-		committedHash, commitErr := r.stageCommit(workspacePath, issue)
-		if commitErr == nil && committedHash != "" {
-			finalCommit = committedHash
-		}
-	}
+	// Note: commits are intentionally left to the human reviewer.
+	// The execute stage produces uncommitted changes so the reviewer can
+	// inspect, amend, split, or re-commit with their own message.
 
 	// 7. Finalize stage recording
 	if stageRecorder != nil {
@@ -287,7 +282,9 @@ Do NOT make any code changes yet.`, base)
 
 %s
 
-Make the necessary code changes to fulfill the requirements.`, base)
+Make the necessary code changes to fulfill the requirements.
+
+Do NOT run any git commands (do not commit, stage, or modify git state).`, base)
 
 	case types.StageVerify:
 		return fmt.Sprintf(`You are in VERIFICATION mode. Review the implementation against the requirements.
@@ -365,42 +362,4 @@ func (r *Runner) gitOutput(ctx context.Context, dir string, args ...string) stri
 	return text
 }
 
-// hasUncommittedChanges reports whether the git worktree has unstaged or
-// staged changes that haven't been committed yet.
-func (r *Runner) hasUncommittedChanges(dir string) bool {
-	if strings.TrimSpace(dir) == "" {
-		return false
-	}
-	// --porcelain gives machine-readable output; empty means clean.
-	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").CombinedOutput()
-	if err != nil {
-		return false
-	}
-	return len(strings.TrimSpace(string(out))) > 0
-}
 
-// stageCommit stages all changes in the worktree and creates a commit.
-// It returns the new commit hash or an error.
-func (r *Runner) stageCommit(dir string, issue types.Issue) (string, error) {
-	if strings.TrimSpace(dir) == "" {
-		return "", errors.New("workspace path is empty")
-	}
-
-	// Stage everything.
-	if out, err := exec.Command("git", "-C", dir, "add", ".").CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git add failed: %w; output: %s", err, strings.TrimSpace(string(out)))
-	}
-
-	// Commit.
-	msg := fmt.Sprintf("feat(%s): %s", issue.ID, issue.Title)
-	if out, err := exec.Command("git", "-C", dir, "commit", "-m", msg).CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git commit failed: %w; output: %s", err, strings.TrimSpace(string(out)))
-	}
-
-	// Return the new HEAD.
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git rev-parse failed: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
-}

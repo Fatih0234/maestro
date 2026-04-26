@@ -654,7 +654,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 
 		if attemptRecorder, ok := diagnostics.AttemptFromContext(runCtx); ok {
 			_ = attemptRecorder.RecordReviewHandoff(
-				fmt.Sprintf("All stages completed for %s.\n\nWorkspace: %s\nBranch: %s", issueID, handoffWorkspace, handoffBranch),
+				fmt.Sprintf("All stages completed for %s.\n\nWorkspace: %s\nBranch: %s\n\nChanges are uncommitted — review the diff, amend as needed, then commit manually.", issueID, handoffWorkspace, handoffBranch),
 				"",
 			)
 		}
