@@ -24,6 +24,21 @@ type OrchestratorEventMsg struct {
 // tickMsg is sent periodically to refresh derived fields like ages.
 type tickMsg time.Time
 
+// SessionRow holds display data for one row in the session table.
+type SessionRow struct {
+	IssueID   string
+	Title     string
+	Stage     types.Stage
+	Status    string
+	PID       int
+	Age       string
+	TokensIn  int64
+	TokensOut int64
+	SessionID string
+	LastEvent string
+	Attempt   int
+}
+
 // Model is the main Bubble Tea model for the Contrabass TUI.
 type Model struct {
 	width  int
@@ -39,7 +54,8 @@ type Model struct {
 	stageProgress map[string]map[types.Stage]bool
 
 	// Session table
-	table Table
+	sessionRows   []SessionRow
+	tableSelected int
 
 	// Sorting caches
 	agentKeys      []string
@@ -120,7 +136,6 @@ func NewModel() Model {
 		stageProgress: make(map[string]map[types.Stage]bool),
 		maxLogSize:    100,
 		eventLog:      make([]EventLogEntry, 0, 100),
-		table:         NewTable(),
 	}
 }
 
@@ -144,10 +159,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.scrollPos < 0 {
 				m.scrollPos = 0
 			}
-			if m.scrollPos < len(m.eventLog) && m.table.RowCount() > 0 {
-				m.table = m.table.SetSelected(m.table.Selected() - 1)
-				if m.table.Selected() < 0 {
-					m.table = m.table.SetSelected(0)
+			if m.scrollPos < len(m.eventLog) && len(m.sessionRows) > 0 {
+				m.tableSelected--
+				if m.tableSelected < 0 {
+					m.tableSelected = 0
 				}
 			}
 		case "down":
@@ -159,10 +174,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.scrollPos > maxScroll {
 				m.scrollPos = maxScroll
 			}
-			if m.table.RowCount() > 0 {
-				m.table = m.table.SetSelected(m.table.Selected() + 1)
-				if m.table.Selected() >= m.table.RowCount() {
-					m.table = m.table.SetSelected(m.table.RowCount() - 1)
+			if len(m.sessionRows) > 0 {
+				m.tableSelected++
+				if m.tableSelected >= len(m.sessionRows) {
+					m.tableSelected = len(m.sessionRows) - 1
 				}
 			}
 		case "r":
@@ -174,7 +189,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.table = m.table.SetWidth(msg.Width)
 
 	case OrchestratorEventMsg:
 		m = m.applyOrchestratorEvent(msg.Event)
@@ -252,8 +266,55 @@ func (m Model) renderTable() string {
 		})
 	}
 
-	m.table = m.table.Update(sessionRows, "")
-	return m.table.View()
+	// Render inline (previously Table.View)
+	headerStyle := lipgloss.NewStyle().Bold(true).Faint(true)
+	header := headerStyle.Render(fmt.Sprintf("%-8s %-24s %-7s %-8s %-10s %-6s %s\n",
+		"Issue", "Title", "Stage", "PID", "Tokens", "Age", "Att"))
+
+	var rowStrs []string
+	for _, row := range sessionRows {
+		ageStr := row.Age
+		if ageStr == "" {
+			ageStr = "0s"
+		}
+
+		tokens := fmt.Sprintf("%s/%s", formatTokensShort(row.TokensIn), formatTokensShort(row.TokensOut))
+
+		title := row.Title
+		if len(title) > 24 {
+			title = title[:21] + "..."
+		}
+		title = fmt.Sprintf("%-24s", title)
+
+		stageStr := fmt.Sprintf("%-7s", compactStage(row.Stage))
+
+		glyph := statusGlyph(row.Status, "")
+
+		attemptStr := fmt.Sprintf("#%d", row.Attempt)
+		if row.Attempt <= 0 {
+			attemptStr = "#1"
+		}
+
+		rowStr := fmt.Sprintf("%s %-8s %-24s %-7s %8d %-10s %-6s %-3s\n",
+			glyph, row.IssueID, title, stageStr, row.PID, tokens, ageStr, attemptStr)
+
+		if isActiveStatus(row.Status) {
+			rowStr = lipgloss.NewStyle().Bold(true).Render(rowStr)
+		} else if row.Status == "done" {
+			rowStr = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render(rowStr)
+		} else if row.Status == "failed" || row.Status == "timeout" || row.Status == "stalled" {
+			rowStr = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(rowStr)
+		}
+
+		rowStrs = append(rowStrs, rowStr)
+	}
+
+	result := header
+	for _, r := range rowStrs {
+		result += r
+	}
+
+	return result
 }
 
 // renderReviewQueue renders issues waiting for human review.
@@ -870,6 +931,28 @@ func compactStage(stage types.Stage) string {
 		return "Review"
 	default:
 		return stage.String()
+	}
+}
+
+func statusGlyph(status string, spinner string) string {
+	if isActiveStatus(status) {
+		if spinner != "" {
+			return spinner
+		}
+		return "●"
+	}
+
+	switch status {
+	case "done":
+		return "✓"
+	case "failed":
+		return "✗"
+	case "timeout":
+		return "⏱"
+	case "stalled":
+		return "⚠"
+	default:
+		return "○"
 	}
 }
 

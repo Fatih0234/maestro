@@ -130,62 +130,6 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
-func TestNewTable(t *testing.T) {
-	tbl := NewTable()
-	if tbl.width != 0 {
-		t.Errorf("width = %d, want 0", tbl.width)
-	}
-	if tbl.selected != 0 {
-		t.Errorf("selected = %d, want 0", tbl.selected)
-	}
-}
-
-func TestTableUpdate(t *testing.T) {
-	tbl := NewTable()
-	rows := []SessionRow{
-		{IssueID: "CB-1", Title: "Test Issue", Stage: types.StageExecute, Status: "running", PID: 1234},
-	}
-	tbl = tbl.Update(rows, "")
-	if len(tbl.rows) != 1 {
-		t.Errorf("len(rows) = %d, want 1", len(tbl.rows))
-	}
-}
-
-func TestTableSetWidth(t *testing.T) {
-	tbl := NewTable().SetWidth(80)
-	if tbl.width != 80 {
-		t.Errorf("width = %d, want 80", tbl.width)
-	}
-}
-
-func TestTableSetSelected(t *testing.T) {
-	tbl := NewTable().SetSelected(5)
-	if tbl.selected != 5 {
-		t.Errorf("selected = %d, want 5", tbl.selected)
-	}
-}
-
-func TestTableSetFocused(t *testing.T) {
-	tbl := NewTable().SetFocused(true)
-	if !tbl.focused {
-		t.Error("focused = false, want true")
-	}
-}
-
-func TestTableRowCount(t *testing.T) {
-	tbl := NewTable().Update([]SessionRow{{}, {}}, "")
-	if tbl.RowCount() != 2 {
-		t.Errorf("RowCount() = %d, want 2", tbl.RowCount())
-	}
-}
-
-func TestTableSelected(t *testing.T) {
-	tbl := NewTable().SetSelected(3)
-	if tbl.Selected() != 3 {
-		t.Errorf("Selected() = %d, want 3", tbl.Selected())
-	}
-}
-
 func TestModelApplyOrchestratorEvent_IssueReadyForReview(t *testing.T) {
 	m := NewModel()
 	m.agents["CB-1"] = AgentRow{IssueID: "CB-1"}
