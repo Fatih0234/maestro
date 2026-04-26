@@ -95,21 +95,42 @@ func (l *cliLogger) Errorf(format string, args ...any) {
 }
 
 func main() {
-	// Dispatch to board subcommands before flag parsing so board commands
-	// can define their own flags.
-	if len(os.Args) > 1 && os.Args[1] == "board" {
-		if err := runBoardCommand(os.Args[2:]); err != nil {
+	// Extract --config before any dispatching so board subcommands and the
+	// orchestrator both respect it regardless of argument ordering.
+	args := extractConfigFlag(os.Args[1:])
+
+	// Dispatch to board subcommands before standard flag parsing so board
+	// commands can define their own flags.
+	if len(args) > 0 && args[0] == "board" {
+		if err := runBoardCommand(args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		return
 	}
 
-	flag.Parse()
+	// Re-assemble remaining args for standard flag parsing.
+	flag.CommandLine.Parse(args)
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// extractConfigFlag scans os.Args for --config, sets the global configPath
+// pointer, and returns the remaining args with --config removed.
+func extractConfigFlag(args []string) []string {
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "--config=") {
+			*configPath = strings.TrimPrefix(args[i], "--config=")
+			return append(args[:i], args[i+1:]...)
+		}
+		if args[i] == "--config" && i+1 < len(args) {
+			*configPath = args[i+1]
+			return append(args[:i], args[i+2:]...)
+		}
+	}
+	return args
 }
 
 // buildDeps loads config and creates all core dependencies.
