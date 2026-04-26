@@ -127,6 +127,24 @@ docs/
 - `--dry-run` — run exactly one poll cycle and exit
 - `--no-tui` — run headless without Bubble Tea
 - `--log-level debug|info|warn|error` — severity filter; invalid values exit with an error
+- `--port 8080` — start a lightweight HTTP API with SSE event streaming (`0` = disabled, default)
+
+### HTTP API (when `--port` is set)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/state` | GET | JSON snapshot of running, backoff, and review queues |
+| `/api/v1/events` | GET | Server-Sent Events stream; initial `snapshot` event followed by live orchestrator events |
+| `/api/v1/refresh` | POST | Trigger immediate poll (placeholder, returns 202 Accepted) |
+
+Example:
+```bash
+# Snapshot
+curl http://localhost:8080/api/v1/state
+
+# Live event stream
+curl -N http://localhost:8080/api/v1/events
+```
 
 ---
 

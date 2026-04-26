@@ -102,10 +102,18 @@ func (m *Manager) Create(ctx context.Context, issue types.Issue) (string, error)
 
 	// Check if directory exists but not tracked
 	if info, err := os.Stat(workspacePath); err == nil && info.IsDir() {
-		m.mu.Lock()
-		m.active[issue.ID] = workspacePath
-		m.mu.Unlock()
-		return workspacePath, nil
+		// Verify it is a valid git worktree, not an orphaned/prunable one.
+		if m.isValidWorktree(ctx, workspacePath) {
+			m.mu.Lock()
+			m.active[issue.ID] = workspacePath
+			m.mu.Unlock()
+			return workspacePath, nil
+		}
+		// Invalid / prunable worktree — remove directory and prune git's registry.
+		if err := os.RemoveAll(workspacePath); err != nil {
+			return "", fmt.Errorf("remove invalid worktree directory %s: %w", workspacePath, err)
+		}
+		_, _ = m.runGit(ctx, "worktree", "prune")
 	}
 
 	// Create parent directory
@@ -122,10 +130,23 @@ func (m *Manager) Create(ctx context.Context, issue types.Issue) (string, error)
 		// worktree but preserved the branch.
 		if strings.Contains(output, "a branch named") && strings.Contains(output, "already exists") {
 			if _, fallbackErr := m.runGit(ctx, "worktree", "add", workspacePath, branchName); fallbackErr != nil {
-				return "", fmt.Errorf(
-					"create git worktree for issue %s: worktree add -b %s failed: %v; fallback to existing branch failed: %w",
-					issue.ID, branchName, err, fallbackErr,
-				)
+				// A stale worktree registration (directory missing but still registered in
+				// git) prevents reusing the branch. Prune the stale entry and retry.
+				combined := fallbackErr.Error()
+				if strings.Contains(combined, "already registered worktree") || strings.Contains(combined, "missing but already registered") {
+					_, _ = m.runGit(ctx, "worktree", "prune", "--expire=now")
+					if _, retryErr := m.runGit(ctx, "worktree", "add", workspacePath, branchName); retryErr != nil {
+						return "", fmt.Errorf(
+							"create git worktree for issue %s: worktree add -b %s failed: %v; fallback to existing branch failed after prune: %w",
+							issue.ID, branchName, err, retryErr,
+						)
+					}
+				} else {
+					return "", fmt.Errorf(
+						"create git worktree for issue %s: worktree add -b %s failed: %v; fallback to existing branch failed: %w",
+						issue.ID, branchName, err, fallbackErr,
+					)
+				}
 			}
 		} else {
 			return "", fmt.Errorf("create git worktree for issue %s: worktree add -b %s failed: %w", issue.ID, branchName, err)
@@ -330,6 +351,50 @@ func (m *Manager) lockIssue(issueID string) func() {
 	mu := lock.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
+}
+
+// isValidWorktree checks whether a directory is a healthy git worktree.
+// It returns false for orphaned/prunable worktrees (missing .git file,
+// broken gitdir link, or worktree marked prunable by git).
+func (m *Manager) isValidWorktree(ctx context.Context, path string) bool {
+	// Must have a .git file (worktrees use a gitfile, not a .git directory)
+	gitFile := filepath.Join(path, ".git")
+	info, err := os.Stat(gitFile)
+	if err != nil || info.IsDir() {
+		return false
+	}
+
+	// The gitfile must contain a valid gitdir: line pointing to an existing path.
+	// Only the first line is checked — .git files may contain additional lines.
+	data, err := os.ReadFile(gitFile)
+	if err != nil {
+		return false
+	}
+	const prefix = "gitdir: "
+	firstLine := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)[0]
+	if !strings.HasPrefix(firstLine, prefix) {
+		return false
+	}
+	gitDir := strings.TrimSpace(firstLine[len(prefix):])
+	if _, err := os.Stat(gitDir); err != nil {
+		return false
+	}
+
+	// Ask git whether this path is known as a valid worktree.
+	// Parse porcelain output line-by-line to avoid substring false positives
+	// (e.g., /worktrees/CB-1 matching /worktrees/CB-10).
+	output, err := m.runGit(ctx, "worktree", "list", "--porcelain")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			if strings.TrimSpace(line[len("worktree "):]) == path {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // runGit executes a git command in the base directory.
