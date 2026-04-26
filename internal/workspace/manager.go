@@ -109,8 +109,9 @@ func (m *Manager) Create(ctx context.Context, issue types.Issue) (string, error)
 			m.mu.Unlock()
 			return workspacePath, nil
 		}
-		// Invalid / prunable worktree — remove and recreate below.
+		// Invalid / prunable worktree — remove directory and prune git's registry.
 		_ = os.RemoveAll(workspacePath)
+		_, _ = m.runGit(ctx, "worktree", "prune")
 	}
 
 	// Create parent directory
@@ -127,10 +128,23 @@ func (m *Manager) Create(ctx context.Context, issue types.Issue) (string, error)
 		// worktree but preserved the branch.
 		if strings.Contains(output, "a branch named") && strings.Contains(output, "already exists") {
 			if _, fallbackErr := m.runGit(ctx, "worktree", "add", workspacePath, branchName); fallbackErr != nil {
-				return "", fmt.Errorf(
-					"create git worktree for issue %s: worktree add -b %s failed: %v; fallback to existing branch failed: %w",
-					issue.ID, branchName, err, fallbackErr,
-				)
+				// A stale worktree registration (directory missing but still registered in
+				// git) prevents reusing the branch. Prune the stale entry and retry.
+				combined := fallbackErr.Error()
+				if strings.Contains(combined, "already registered worktree") || strings.Contains(combined, "missing but already registered") {
+					_, _ = m.runGit(ctx, "worktree", "prune", "--expire=now")
+					if _, retryErr := m.runGit(ctx, "worktree", "add", workspacePath, branchName); retryErr != nil {
+						return "", fmt.Errorf(
+							"create git worktree for issue %s: worktree add -b %s failed: %v; fallback to existing branch failed after prune: %w",
+							issue.ID, branchName, err, retryErr,
+						)
+					}
+				} else {
+					return "", fmt.Errorf(
+						"create git worktree for issue %s: worktree add -b %s failed: %v; fallback to existing branch failed: %w",
+						issue.ID, branchName, err, fallbackErr,
+					)
+				}
 			}
 		} else {
 			return "", fmt.Errorf("create git worktree for issue %s: worktree add -b %s failed: %w", issue.ID, branchName, err)

@@ -231,6 +231,54 @@ func TestManager_Create_ReusesExistingBranchAfterCleanup(t *testing.T) {
 	}
 }
 
+func TestManager_Create_RecoversFromMissingWorktreeDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
+
+	manager := New(Config{
+		BaseDir:      tmpDir,
+		WorktreeDir:  "workspaces",
+		BranchPrefix: "opencode/",
+	})
+
+	issue := types.Issue{
+		ID:          "CB-1",
+		Identifier:  "CB-1",
+		Title:       "Test Issue",
+		Description: "Test description",
+	}
+
+	// Create first time
+	firstPath, err := manager.Create(context.Background(), issue)
+	if err != nil {
+		t.Fatalf("first Create failed: %v", err)
+	}
+
+	// Simulate external deletion of the worktree directory
+	// (user manually removed it, or OS cleanup, etc.)
+	if err := os.RemoveAll(firstPath); err != nil {
+		t.Fatalf("failed to simulate external deletion: %v", err)
+	}
+
+	// Second create should recover by pruning stale registration and recreating
+	secondPath, err := manager.Create(context.Background(), issue)
+	if err != nil {
+		t.Fatalf("second Create should recover from missing directory: %v", err)
+	}
+
+	if secondPath != firstPath {
+		t.Fatalf("second Create path = %q, want %q", secondPath, firstPath)
+	}
+
+	if !manager.Exists(issue.ID) {
+		t.Fatal("expected workspace to exist after recovery")
+	}
+
+	if _, err := os.Stat(secondPath); err != nil {
+		t.Fatalf("workspace directory not recreated: %v", err)
+	}
+}
+
 func TestManager_Create_EmptyID(t *testing.T) {
 	tmpDir := t.TempDir()
 	initGitRepo(t, tmpDir)
