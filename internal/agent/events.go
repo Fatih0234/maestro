@@ -17,48 +17,6 @@ const (
 	EventTypeMessageUpdated = "message.part.updated"
 )
 
-// IsIdle checks if the event indicates the session has completed (status.type == "idle").
-func IsIdle(event types.AgentEvent) bool {
-	payload, ok := event.Payload.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	properties, ok := payload["properties"].(map[string]interface{})
-	if !ok {
-		return false
-	}
-	status, ok := properties["status"].(map[string]interface{})
-	if !ok {
-		return false
-	}
-	statusType, _ := status["type"].(string)
-	return statusType == "idle"
-}
-
-// IsError checks if the event indicates the session encountered an error.
-func IsError(event types.AgentEvent) bool {
-	return event.Type == EventTypeSessionError
-}
-
-// IsHeartbeat checks if the event is a server heartbeat (can be ignored).
-func IsHeartbeat(event types.AgentEvent) bool {
-	return event.Type == EventTypeHeartbeat || event.Type == EventTypeConnected
-}
-
-// ExtractSessionID extracts the session ID from an event's payload.
-func ExtractSessionID(event types.AgentEvent) string {
-	payload, ok := event.Payload.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	properties, ok := payload["properties"].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	sessionID, _ := properties["sessionID"].(string)
-	return sessionID
-}
-
 // ExtractTextContent extracts text content from an agent event.
 func ExtractTextContent(event types.AgentEvent) string {
 	payload, ok := event.Payload.(map[string]interface{})
@@ -66,14 +24,12 @@ func ExtractTextContent(event types.AgentEvent) string {
 		return ""
 	}
 
-	// Try to extract text from various event structures
 	if part, ok := payload["part"].(map[string]interface{}); ok {
 		if text, ok := part["text"].(string); ok {
 			return text
 		}
 	}
 
-	// Try "text" field at top level
 	if text, ok := payload["text"].(string); ok {
 		return text
 	}
