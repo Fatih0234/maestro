@@ -99,38 +99,55 @@ func (l *cliLogger) Errorf(format string, args ...any) {
 }
 
 func main() {
-	flag.Parse()
+	// Extract --config before any dispatching so board subcommands and the
+	// orchestrator both respect it regardless of argument ordering.
+	args := extractConfigFlag(os.Args[1:])
 
+	// Dispatch to board subcommands before standard flag parsing so board
+	// commands can define their own flags.
+	if len(args) > 0 && args[0] == "board" {
+		if err := runBoardCommand(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Re-assemble remaining args for standard flag parsing.
+	flag.CommandLine.Parse(args)
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	level, err := parseLogLevel(*logLevel)
+// extractConfigFlag scans os.Args for --config, sets the global configPath
+// pointer, and returns the remaining args with --config removed.
+func extractConfigFlag(args []string) []string {
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "--config=") {
+			*configPath = strings.TrimPrefix(args[i], "--config=")
+			return append(args[:i], args[i+1:]...)
+		}
+		if args[i] == "--config" && i+1 < len(args) {
+			*configPath = args[i+1]
+			return append(args[:i], args[i+2:]...)
+		}
+	}
+	return args
+}
+
+// buildDeps loads config and creates all core dependencies.
+func buildDeps(configPath string) (*config.Config, types.IssueTracker, workspace.WorkspaceManager, *diagnostics.Recorder, error) {
+	cfg, err := config.Load(configPath)
 	if err != nil {
-		return err
+		return nil, nil, nil, nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	logger := newCLILogger(level)
-
-	// Load config
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	logger.Infof("Starting Contrabass with config: %s", *configPath)
-	logger.Infof("  max_concurrency: %d", cfg.MaxConcurrency)
-	logger.Infof("  poll_interval: %dms", cfg.PollIntervalMs)
-
-	// Create tracker
 	boardDir := cfg.Tracker.BoardDir
 	if boardDir == "" {
 		boardDir = ".contrabass/board"
 	}
-
 	var tr types.IssueTracker
 	switch cfg.Tracker.Type {
 	case "github":
@@ -148,24 +165,42 @@ func run() error {
 		})
 	}
 
-	// Create workspace manager
 	wsMgr := workspace.New(workspace.Config{
 		BaseDir:      cfg.Workspace.BaseDir,
 		BranchPrefix: cfg.Workspace.BranchPrefix,
 	})
+
+	recorder, err := diagnostics.NewRecorder(boardDir)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("failed to initialize diagnostics recorder: %w", err)
+	}
+
+	return cfg, tr, wsMgr, recorder, nil
+}
+
+func run() error {
+	level, err := parseLogLevel(*logLevel)
+	if err != nil {
+		return err
+	}
+
+	logger := newCLILogger(level)
+
+	cfg, tr, wsMgr, recorder, err := buildDeps(*configPath)
+	if err != nil {
+		return err
+	}
+	defer recorder.Close()
+
+	logger.Infof("Starting Contrabass with config: %s", *configPath)
+	logger.Infof("  max_concurrency: %d", cfg.MaxConcurrency)
+	logger.Infof("  poll_interval: %dms", cfg.PollIntervalMs)
 
 	// Create agent runner based on config
 	agentRunner, err := newAgentRunnerFromConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create agent runner: %w", err)
 	}
-
-	// Create persistent diagnostics recorder
-	recorder, err := diagnostics.NewRecorder(boardDir)
-	if err != nil {
-		return fmt.Errorf("failed to initialize diagnostics recorder: %w", err)
-	}
-	defer recorder.Close()
 
 	// Create orchestrator
 	orch := orchestrator.New(cfg, tr, wsMgr, agentRunner)
@@ -285,7 +320,6 @@ func maybeStartWebServer(ctx context.Context, orch *orchestrator.Orchestrator) *
 	return srv
 }
 
-// runWithTUI starts the orchestrator with a Bubble Tea TUI.
 // newAgentRunnerFromConfig creates the appropriate agent runner based on cfg.Agent.Type.
 func newAgentRunnerFromConfig(cfg *config.Config) (types.AgentRunner, error) {
 	switch cfg.Agent.Type {

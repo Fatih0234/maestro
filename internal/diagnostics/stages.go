@@ -431,7 +431,7 @@ func (ar *AttemptRecorder) RecordReviewDecision(decision types.ReviewDecision) e
 		decision.ReviewedAt = time.Now().UTC()
 	}
 	if strings.TrimSpace(decision.ReviewedBy) == "" {
-		decision.ReviewedBy = defaultReviewer()
+		decision.ReviewedBy = DefaultReviewer()
 	}
 	if decision.FollowUpState == "" {
 		switch decision.Decision {
@@ -745,7 +745,7 @@ func (sr *StageRecorder) appendJSONLine(file *os.File, value any) error {
 	return nil
 }
 
-func defaultReviewer() string {
+func DefaultReviewer() string {
 	if reviewer := strings.TrimSpace(os.Getenv("USER")); reviewer != "" {
 		return reviewer
 	}
