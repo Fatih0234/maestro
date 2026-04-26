@@ -97,16 +97,6 @@ func (s *StateManager) UpdateLastEvent(issueID string) {
 	}
 }
 
-// SetError sets the error for a run.
-func (s *StateManager) SetError(issueID string, err string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if run, ok := s.runs[issueID]; ok {
-		run.Error = err
-	}
-}
-
 // SetProcess sets the agent process for a run.
 func (s *StateManager) SetProcess(issueID string, proc *types.AgentProcess) {
 	s.mu.Lock()
@@ -157,16 +147,4 @@ func (s *StateManager) GetAll() []RunState {
 	return result
 }
 
-// GetByPhase returns copies of runs in a specific phase.
-func (s *StateManager) GetByPhase(phase types.RunPhase) []RunState {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
-	result := make([]RunState, 0)
-	for _, run := range s.runs {
-		if run.Phase == phase {
-			result = append(result, *run)
-		}
-	}
-	return result
-}

@@ -186,29 +186,6 @@ func TestTableSelected(t *testing.T) {
 	}
 }
 
-func TestDisplayIssueID(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"", "-"},
-		{"   ", "-"},
-		{"CB-1", "CB-1"},
-		{"PROJ-123", "PROJ-123"},
-		{"abc", "abc"},
-		{"verylongidentifier123", "verylongi..."},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := displayIssueID(tt.input)
-			if got != tt.want {
-				t.Errorf("displayIssueID(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestModelApplyOrchestratorEvent_IssueReadyForReview(t *testing.T) {
 	m := NewModel()
 	m.agents["CB-1"] = AgentRow{IssueID: "CB-1"}

@@ -3,8 +3,6 @@ package tui
 
 import (
 	"fmt"
-	"regexp"
-	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
@@ -166,18 +164,3 @@ func statusGlyph(status string, spinner string) string {
 	}
 }
 
-var issueKeyPattern = regexp.MustCompile(`^[A-Z]+-[0-9]+$`)
-
-func displayIssueID(id string) string {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return "-"
-	}
-	if issueKeyPattern.MatchString(id) {
-		return id
-	}
-	if len(id) > 12 {
-		return id[:9] + "..."
-	}
-	return id
-}
