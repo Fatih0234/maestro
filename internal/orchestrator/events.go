@@ -33,134 +33,46 @@ const (
 	EventFetchError          = "fetch.error"
 )
 
-// Event payloads
-
-// IssueClaimedPayload is the payload for EventIssueClaimed.
-type IssueClaimedPayload struct {
-	Issue interface{} // types.Issue
-}
-
-// WorkspaceCreatedPayload is the payload for EventWorkspaceCreated.
-type WorkspaceCreatedPayload struct {
-	IssueID string
-	Path    string
-}
-
-// PromptBuiltPayload is the payload for EventPromptBuilt.
-type PromptBuiltPayload struct {
-	IssueID string
-	Length  int
-}
-
-// AgentStartedPayload is the payload for EventAgentStarted.
-type AgentStartedPayload struct {
+// ProcessPayload carries agent process and token information.
+// Used by EventAgentStarted and EventTokensUpdated.
+type ProcessPayload struct {
 	IssueID   string
 	Stage     types.Stage
 	Attempt   int
 	PID       int
 	SessionID string
-}
-
-// TokensUpdatedPayload is the payload for EventTokensUpdated.
-type TokensUpdatedPayload struct {
-	IssueID   string
 	TokensIn  int64
 	TokensOut int64
 }
 
-// AgentOutputPayload is the payload for EventAgentOutput.
-type AgentOutputPayload struct {
-	IssueID string
-	Text    string
-}
-
-// AgentFinishedPayload is the payload for EventAgentFinished.
-type AgentFinishedPayload struct {
-	IssueID string
-	Success bool
-	Error   string
-}
-
-// StageStartedPayload is the payload for EventStageStarted.
-type StageStartedPayload struct {
-	IssueID string
-	Stage   types.Stage
-	Attempt int
-	Agent   string
-}
-
-// StageCompletedPayload is the payload for EventStageCompleted.
-type StageCompletedPayload struct {
-	IssueID string
-	Stage   types.Stage
-	Summary string
-}
-
-// StageFailedPayload is the payload for EventStageFailed.
-type StageFailedPayload struct {
+// StagePayload carries stage lifecycle information.
+// Used by EventStageStarted, EventStageCompleted, and EventStageFailed.
+type StagePayload struct {
 	IssueID     string
 	Stage       types.Stage
+	Attempt     int
+	Agent       string
+	Summary     string
 	FailureKind types.StageFailureKind
 	Error       string
 	Retryable   bool
 }
 
-// IssueReadyForReviewPayload is the payload for EventIssueReadyForReview.
-type IssueReadyForReviewPayload struct {
-	IssueID       string
-	Title         string
-	Branch        string
-	WorkspacePath string
-	SummaryPath   string
-}
-
-// IssueCompletedPayload is the payload for EventIssueCompleted.
-type IssueCompletedPayload struct {
-	IssueID string
-}
-
-// IssueRetryingPayload is the payload for EventIssueRetrying.
-type IssueRetryingPayload struct {
+// BackoffPayload carries retry/backoff information.
+// Used by EventBackoffQueued and EventIssueRetrying.
+type BackoffPayload struct {
 	IssueID     string
-	Attempt     int
 	Stage       types.Stage
+	Attempt     int
 	RetryAt     time.Time
 	Error       string
 	FailureKind types.StageFailureKind
 }
 
-// BackoffQueuedPayload is the payload for EventBackoffQueued.
-type BackoffQueuedPayload struct {
-	IssueID     string
-	Attempt     int
-	Stage       types.Stage
-	RetryAt     time.Time
-	Error       string
-	FailureKind types.StageFailureKind
-}
-
-// StallDetectedPayload is the payload for EventStallDetected.
-type StallDetectedPayload struct {
-	IssueID      string
-	Reason       string
-	Detail       string
-	LastEventAge time.Duration
-}
-
-// TimeoutDetectedPayload is the payload for EventTimeoutDetected.
-type TimeoutDetectedPayload struct {
+// AgentResultPayload carries agent completion status.
+// Used by EventAgentFinished.
+type AgentResultPayload struct {
 	IssueID string
-	Elapsed time.Duration
-}
-
-// MergeFailedPayload is the payload for EventMergeFailed.
-type MergeFailedPayload struct {
-	IssueID string
+	Success bool
 	Error   string
-}
-
-// FetchErrorPayload is the payload for EventFetchError.
-type FetchErrorPayload struct {
-	Operation string
-	Error     string
 }

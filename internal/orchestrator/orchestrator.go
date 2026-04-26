@@ -172,9 +172,9 @@ func (o *Orchestrator) handleTimeout(run RunState, elapsed time.Duration) {
 	o.mu.Unlock()
 
 	// Emit timeout event
-	o.emit(EventTimeoutDetected, issueID, TimeoutDetectedPayload{
-		IssueID: issueID,
-		Elapsed: elapsed,
+	o.emit(EventTimeoutDetected, issueID, map[string]interface{}{
+		"issue_id": issueID,
+		"elapsed":  elapsed,
 	})
 
 	// Enqueue backoff
@@ -184,7 +184,7 @@ func (o *Orchestrator) handleTimeout(run RunState, elapsed time.Duration) {
 
 	o.finalizeAttempt(issueID, run.Attempt, "timed_out", &entry.RetryAt, fmt.Errorf("timeout after %v", elapsed))
 
-	o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
+	o.emit(EventBackoffQueued, issueID, BackoffPayload{
 		IssueID:     issueID,
 		Attempt:     attempt,
 		Stage:       run.Stage,
@@ -213,11 +213,11 @@ func (o *Orchestrator) handleStall(run RunState, lastEventAge time.Duration) {
 	o.mu.Unlock()
 
 	// Emit stall event
-	o.emit(EventStallDetected, issueID, StallDetectedPayload{
-		IssueID:      issueID,
-		Reason:       "stall",
-		Detail:       fmt.Sprintf("no event received for %v", lastEventAge),
-		LastEventAge: lastEventAge,
+	o.emit(EventStallDetected, issueID, map[string]interface{}{
+		"issue_id":       issueID,
+		"reason":         "stall",
+		"detail":         fmt.Sprintf("no event received for %v", lastEventAge),
+		"last_event_age": lastEventAge,
 	})
 
 	// Enqueue backoff
@@ -227,7 +227,7 @@ func (o *Orchestrator) handleStall(run RunState, lastEventAge time.Duration) {
 
 	o.finalizeAttempt(issueID, run.Attempt, "stalled", &entry.RetryAt, fmt.Errorf("stall: no event for %v", lastEventAge))
 
-	o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
+	o.emit(EventBackoffQueued, issueID, BackoffPayload{
 		IssueID:     issueID,
 		Attempt:     attempt,
 		Stage:       run.Stage,
@@ -302,9 +302,9 @@ func (o *Orchestrator) dispatchReady() {
 	// Fetch unclaimed issues
 	issues, err := o.Tracker.FetchIssues()
 	if err != nil {
-		o.emit(EventFetchError, "", FetchErrorPayload{
-			Operation: "FetchIssues",
-			Error:     err.Error(),
+		o.emit(EventFetchError, "", map[string]interface{}{
+			"operation": "FetchIssues",
+			"error":     err.Error(),
 		})
 		return
 	}
@@ -355,7 +355,7 @@ func (o *Orchestrator) dispatchReady() {
 		}
 
 		// Emit claimed
-		o.emit(EventIssueClaimed, issue.ID, IssueClaimedPayload{Issue: claimed})
+		o.emit(EventIssueClaimed, issue.ID, map[string]interface{}{"issue": claimed})
 
 		// Start the run from the plan stage
 		o.startRun(claimed, 1, types.StagePlan)
@@ -439,7 +439,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 						totalTokensIn += payload["tokens_in"]
 						totalTokensOut += payload["tokens_out"]
 						o.State.Mutate(issueID, func(r *RunState) { r.TokensIn = totalTokensIn; r.TokensOut = totalTokensOut })
-						o.emit(EventTokensUpdated, issueID, TokensUpdatedPayload{
+						o.emit(EventTokensUpdated, issueID, ProcessPayload{
 							IssueID:   issueID,
 							TokensIn:  totalTokensIn,
 							TokensOut: totalTokensOut,
@@ -448,9 +448,9 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 					}
 				case pipeline.EventAgentOutput:
 					if payload, ok := event.Payload.(map[string]string); ok {
-						o.emit(EventAgentOutput, issueID, AgentOutputPayload{
-							IssueID: issueID,
-							Text:    payload["text"],
+						o.emit(EventAgentOutput, issueID, map[string]interface{}{
+							"issue_id": issueID,
+							"text":     payload["text"],
 						})
 						return
 					}
@@ -466,7 +466,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 						if rs, ok := o.State.Get(issueID); ok {
 							currentStage = rs.Stage
 						}
-						o.emit(EventAgentStarted, issueID, AgentStartedPayload{
+						o.emit(EventAgentStarted, issueID, ProcessPayload{
 							IssueID:   issueID,
 							Stage:     currentStage,
 							Attempt:   attempt,
@@ -500,19 +500,19 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				o.persistRetryQueue(issueID, entry.RetryAt)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
-				o.emit(EventStageFailed, issueID, StageFailedPayload{
+				o.emit(EventStageFailed, issueID, StagePayload{
 					IssueID:     issueID,
 					Stage:       stage,
 					FailureKind: types.StageFailureTimeout,
 					Error:       err.Error(),
 					Retryable:   true,
 				})
-				o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+				o.emit(EventAgentFinished, issueID, AgentResultPayload{
 					IssueID: issueID,
 					Success: false,
 					Error:   err.Error(),
 				})
-				o.emit(EventBackoffQueued, issueID, BackoffQueuedPayload{
+				o.emit(EventBackoffQueued, issueID, BackoffPayload{
 					IssueID:     issueID,
 					Attempt:     nextAttempt,
 					Stage:       stage,
@@ -520,7 +520,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 					Error:       err.Error(),
 					FailureKind: types.StageFailureTimeout,
 				})
-				o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
+				o.emit(EventIssueRetrying, issueID, BackoffPayload{
 					IssueID:     issueID,
 					Attempt:     nextAttempt,
 					Stage:       stage,
@@ -542,7 +542,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 			}
 			stageCtx := types.WithStage(runCtx, stage, stageAgent)
 
-			o.emit(EventStageStarted, issueID, StageStartedPayload{
+			o.emit(EventStageStarted, issueID, StagePayload{
 				IssueID: issueID,
 				Stage:   stage,
 				Attempt: attempt,
@@ -566,19 +566,19 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				o.persistRetryQueue(issueID, entry.RetryAt)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
-				o.emit(EventStageFailed, issueID, StageFailedPayload{
+				o.emit(EventStageFailed, issueID, StagePayload{
 					IssueID:     issueID,
 					Stage:       stage,
 					FailureKind: o.classifyStageFailure(err, stage),
 					Error:       err.Error(),
 					Retryable:   true,
 				})
-				o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+				o.emit(EventAgentFinished, issueID, AgentResultPayload{
 					IssueID: issueID,
 					Success: false,
 					Error:   err.Error(),
 				})
-				o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
+				o.emit(EventIssueRetrying, issueID, BackoffPayload{
 					IssueID:     issueID,
 					Attempt:     nextAttempt,
 					Stage:       stage,
@@ -606,19 +606,19 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				o.persistRetryQueue(issueID, entry.RetryAt)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, result.Error)
 
-				o.emit(EventStageFailed, issueID, StageFailedPayload{
+				o.emit(EventStageFailed, issueID, StagePayload{
 					IssueID:     issueID,
 					Stage:       stage,
 					FailureKind: failureKind,
 					Error:       errMsg,
 					Retryable:   true,
 				})
-				o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+				o.emit(EventAgentFinished, issueID, AgentResultPayload{
 					IssueID: issueID,
 					Success: false,
 					Error:   errMsg,
 				})
-				o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
+				o.emit(EventIssueRetrying, issueID, BackoffPayload{
 					IssueID:     issueID,
 					Attempt:     nextAttempt,
 					Stage:       stage,
@@ -630,7 +630,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 			}
 
 			// Stage succeeded.
-			o.emit(EventStageCompleted, issueID, StageCompletedPayload{
+			o.emit(EventStageCompleted, issueID, StagePayload{
 				IssueID: issueID,
 				Stage:   stage,
 				Summary: fmt.Sprintf("%s stage completed", stage),
@@ -668,12 +668,12 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 			o.persistRetryQueue(issueID, entry.RetryAt)
 			o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
-			o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+			o.emit(EventAgentFinished, issueID, AgentResultPayload{
 				IssueID: issueID,
 				Success: false,
 				Error:   err.Error(),
 			})
-			o.emit(EventIssueRetrying, issueID, IssueRetryingPayload{
+			o.emit(EventIssueRetrying, issueID, BackoffPayload{
 				IssueID:     issueID,
 				Attempt:     nextAttempt,
 				Stage:       types.StagePlan,
@@ -689,16 +689,16 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 
 		o.finalizeAttempt(issueID, attempt, "awaiting_review", nil, nil)
 
-		o.emit(EventAgentFinished, issueID, AgentFinishedPayload{
+		o.emit(EventAgentFinished, issueID, AgentResultPayload{
 			IssueID: issueID,
 			Success: true,
 			Error:   "",
 		})
-		o.emit(EventIssueReadyForReview, issueID, IssueReadyForReviewPayload{
-			IssueID:       issueID,
-			Title:         issue.Title,
-			Branch:        handoffBranch,
-			WorkspacePath: handoffWorkspace,
+		o.emit(EventIssueReadyForReview, issueID, map[string]interface{}{
+			"issue_id":       issueID,
+			"title":          issue.Title,
+			"branch":         handoffBranch,
+			"workspace_path": handoffWorkspace,
 		})
 	}()
 }

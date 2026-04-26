@@ -138,11 +138,11 @@ func TestModelApplyOrchestratorEvent_IssueReadyForReview(t *testing.T) {
 		Type:      orchestrator.EventIssueReadyForReview,
 		IssueID:   "CB-1",
 		Timestamp: time.Now(),
-		Payload: orchestrator.IssueReadyForReviewPayload{
-			IssueID:       "CB-1",
-			Title:         "Fix login bug",
-			Branch:        "contrabass/CB-1",
-			WorkspacePath: "/tmp/ws/CB-1",
+		Payload: map[string]interface{}{
+			"issue_id":       "CB-1",
+			"title":          "Fix login bug",
+			"branch":         "contrabass/CB-1",
+			"workspace_path": "/tmp/ws/CB-1",
 		},
 	}
 
@@ -174,7 +174,7 @@ func TestModelApplyOrchestratorEvent_IssueCompletedRemovesReviewEntry(t *testing
 		Type:      orchestrator.EventIssueCompleted,
 		IssueID:   "CB-1",
 		Timestamp: time.Now(),
-		Payload:   orchestrator.IssueCompletedPayload{IssueID: "CB-1"},
+		Payload:   map[string]interface{}{"issue_id": "CB-1"},
 	}
 
 	m = m.applyOrchestratorEvent(event)
@@ -191,7 +191,7 @@ func TestModelApplyOrchestratorEvent_BackoffQueuedWithStageAndFailureKind(t *tes
 		Type:      orchestrator.EventBackoffQueued,
 		IssueID:   "CB-1",
 		Timestamp: time.Now(),
-		Payload: orchestrator.BackoffQueuedPayload{
+		Payload: orchestrator.BackoffPayload{
 			IssueID:     "CB-1",
 			Attempt:     2,
 			Stage:       types.StageExecute,
@@ -228,7 +228,7 @@ func TestModelApplyOrchestratorEvent_IssueRetryingHandledLikeBackoff(t *testing.
 		Type:      orchestrator.EventIssueRetrying,
 		IssueID:   "CB-1",
 		Timestamp: time.Now(),
-		Payload: orchestrator.IssueRetryingPayload{
+		Payload: orchestrator.BackoffPayload{
 			IssueID:     "CB-1",
 			Attempt:     3,
 			Stage:       types.StageVerify,
@@ -260,7 +260,7 @@ func TestModelApplyOrchestratorEvent_StageCompletedTracksProgress(t *testing.T) 
 		Type:      orchestrator.EventStageCompleted,
 		IssueID:   "CB-1",
 		Timestamp: time.Now(),
-		Payload: orchestrator.StageCompletedPayload{
+		Payload: orchestrator.StagePayload{
 			IssueID: "CB-1",
 			Stage:   types.StagePlan,
 			Summary: "plan done",
@@ -287,11 +287,11 @@ func TestModelApplyOrchestratorEvent_ReviewRowIncludesStageProgress(t *testing.T
 		Type:      orchestrator.EventIssueReadyForReview,
 		IssueID:   "CB-1",
 		Timestamp: time.Now(),
-		Payload: orchestrator.IssueReadyForReviewPayload{
-			IssueID:       "CB-1",
-			Title:         "Fix bug",
-			Branch:        "contrabass/CB-1",
-			WorkspacePath: "/tmp/ws/CB-1",
+		Payload: map[string]interface{}{
+			"issue_id":       "CB-1",
+			"title":          "Fix bug",
+			"branch":         "contrabass/CB-1",
+			"workspace_path": "/tmp/ws/CB-1",
 		},
 	}
 
@@ -311,16 +311,16 @@ func TestModelApplyOrchestratorEvent_ReviewRowIncludesStageProgress(t *testing.T
 
 func TestFormatEventMessage(t *testing.T) {
 	tests := []struct {
-		name     string
-		event    types.OrchestratorEvent
-		wantMsg  string
-		wantSev  string
+		name    string
+		event   types.OrchestratorEvent
+		wantMsg string
+		wantSev string
 	}{
 		{
 			name: "stage started",
 			event: types.OrchestratorEvent{
 				Type: orchestrator.EventStageStarted,
-				Payload: orchestrator.StageStartedPayload{
+				Payload: orchestrator.StagePayload{
 					Stage:   types.StageExecute,
 					Attempt: 1,
 				},
@@ -332,7 +332,7 @@ func TestFormatEventMessage(t *testing.T) {
 			name: "stage completed",
 			event: types.OrchestratorEvent{
 				Type: orchestrator.EventStageCompleted,
-				Payload: orchestrator.StageCompletedPayload{
+				Payload: orchestrator.StagePayload{
 					Stage: types.StageVerify,
 				},
 			},
@@ -343,7 +343,7 @@ func TestFormatEventMessage(t *testing.T) {
 			name: "stage failed",
 			event: types.OrchestratorEvent{
 				Type: orchestrator.EventStageFailed,
-				Payload: orchestrator.StageFailedPayload{
+				Payload: orchestrator.StagePayload{
 					Stage:       types.StageExecute,
 					FailureKind: types.StageFailureToolError,
 				},
@@ -352,10 +352,10 @@ func TestFormatEventMessage(t *testing.T) {
 			wantSev: "error",
 		},
 		{
-			name:     "unknown event",
-			event:    types.OrchestratorEvent{Type: "custom.thing"},
-			wantMsg:  "custom.thing",
-			wantSev:  "info",
+			name:    "unknown event",
+			event:   types.OrchestratorEvent{Type: "custom.thing"},
+			wantMsg: "custom.thing",
+			wantSev: "info",
 		},
 	}
 

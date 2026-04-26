@@ -32,7 +32,7 @@ func (d *dummyRunner) Start(ctx context.Context, issue types.Issue, workspace, p
 	return nil, errors.New("not used - dummy runner")
 }
 func (d *dummyRunner) Stop(proc *types.AgentProcess) error { return nil }
-func (d *dummyRunner) Close() error                         { return nil }
+func (d *dummyRunner) Close() error                        { return nil }
 
 func main() {
 	fmt.Println("═══════════════════════════════════════════════════════")
@@ -236,11 +236,8 @@ func main() {
 				switch p := event.Payload.(type) {
 				case types.Issue:
 					fmt.Printf(" - %s", p.Title)
-				case orchestrator.IssueClaimedPayload:
 					fmt.Printf(" - %v", p)
-				case orchestrator.AgentStartedPayload:
 					fmt.Printf(" [pid=%d, session=%s]", p.PID, p.SessionID)
-				case orchestrator.TokensUpdatedPayload:
 					fmt.Printf(" [in=%d, out=%d]", p.TokensIn, p.TokensOut)
 				}
 			}

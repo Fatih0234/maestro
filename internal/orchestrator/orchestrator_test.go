@@ -498,13 +498,13 @@ func TestOrchestrator_HandleAgentDone_Success(t *testing.T) {
 		t.Errorf("Cleanup called %d times, want 0", got)
 	}
 
-	var handoffPayload IssueReadyForReviewPayload
+	var handoffPayload map[string]interface{}
 	foundHandoff := false
 	for _, evt := range events.GetByIssue("CB-1") {
 		if evt.Type != EventIssueReadyForReview {
 			continue
 		}
-		payload, ok := evt.Payload.(IssueReadyForReviewPayload)
+		payload, ok := evt.Payload.(map[string]interface{})
 		if !ok {
 			t.Fatalf("unexpected payload type %T", evt.Payload)
 		}
@@ -515,10 +515,18 @@ func TestOrchestrator_HandleAgentDone_Success(t *testing.T) {
 	if !foundHandoff {
 		t.Fatal("ready_for_review payload not found")
 	}
-	if handoffPayload.Branch != "opencode/CB-1" {
-		t.Errorf("handoff branch = %q, want opencode/CB-1", handoffPayload.Branch)
+	branch := ""
+	if v, ok := handoffPayload["branch"].(string); ok {
+		branch = v
 	}
-	if handoffPayload.WorkspacePath == "" {
+	if branch != "opencode/CB-1" {
+		t.Errorf("handoff branch = %q, want opencode/CB-1", branch)
+	}
+	workspacePath := ""
+	if v, ok := handoffPayload["workspace_path"].(string); ok {
+		workspacePath = v
+	}
+	if workspacePath == "" {
 		t.Error("handoff workspace path should not be empty")
 	}
 }

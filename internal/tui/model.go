@@ -503,7 +503,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 
 	switch event.Type {
 	case orchestrator.EventAgentStarted:
-		if payload, ok := event.Payload.(orchestrator.AgentStartedPayload); ok {
+		if payload, ok := event.Payload.(orchestrator.ProcessPayload); ok {
 			issueID := event.IssueID
 			if issueID == "" {
 				issueID = "-"
@@ -523,7 +523,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		}
 
 	case orchestrator.EventTokensUpdated:
-		if payload, ok := event.Payload.(orchestrator.TokensUpdatedPayload); ok {
+		if payload, ok := event.Payload.(orchestrator.ProcessPayload); ok {
 			if row, exists := m.agents[event.IssueID]; exists {
 				row.TokensIn = payload.TokensIn
 				row.TokensOut = payload.TokensOut
@@ -533,7 +533,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		}
 
 	case orchestrator.EventStageStarted:
-		if payload, ok := event.Payload.(orchestrator.StageStartedPayload); ok {
+		if payload, ok := event.Payload.(orchestrator.StagePayload); ok {
 			if row, exists := m.agents[event.IssueID]; exists {
 				row.Stage = payload.Stage
 				row.Status = "running"
@@ -544,7 +544,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		}
 
 	case orchestrator.EventStageCompleted:
-		if payload, ok := event.Payload.(orchestrator.StageCompletedPayload); ok {
+		if payload, ok := event.Payload.(orchestrator.StagePayload); ok {
 			if row, exists := m.agents[event.IssueID]; exists {
 				row.Stage = payload.Stage
 				row.LastEvent = fmt.Sprintf("[%s] completed", compactStage(payload.Stage))
@@ -554,7 +554,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		}
 
 	case orchestrator.EventStageFailed:
-		if payload, ok := event.Payload.(orchestrator.StageFailedPayload); ok {
+		if payload, ok := event.Payload.(orchestrator.StagePayload); ok {
 			if row, exists := m.agents[event.IssueID]; exists {
 				row.Stage = payload.Stage
 				row.Status = "failed"
@@ -564,7 +564,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		}
 
 	case orchestrator.EventAgentFinished:
-		if payload, ok := event.Payload.(orchestrator.AgentFinishedPayload); ok {
+		if payload, ok := event.Payload.(orchestrator.AgentResultPayload); ok {
 			if !payload.Success {
 				// Move to backoff or failed state
 				if row, exists := m.agents[event.IssueID]; exists {
@@ -580,7 +580,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		}
 
 	case orchestrator.EventBackoffQueued:
-		if payload, ok := event.Payload.(orchestrator.BackoffQueuedPayload); ok {
+		if payload, ok := event.Payload.(orchestrator.BackoffPayload); ok {
 			m.backoffs[event.IssueID] = BackoffRow{
 				IssueID:     event.IssueID,
 				Attempt:     payload.Attempt,
@@ -592,7 +592,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		}
 
 	case orchestrator.EventIssueRetrying:
-		if payload, ok := event.Payload.(orchestrator.IssueRetryingPayload); ok {
+		if payload, ok := event.Payload.(orchestrator.BackoffPayload); ok {
 			m.backoffs[event.IssueID] = BackoffRow{
 				IssueID:     event.IssueID,
 				Attempt:     payload.Attempt,
@@ -604,10 +604,10 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		}
 
 	case orchestrator.EventIssueReadyForReview:
-		if payload, ok := event.Payload.(orchestrator.IssueReadyForReviewPayload); ok {
-			issueID := payload.IssueID
-			if issueID == "" {
-				issueID = event.IssueID
+		if payload, ok := event.Payload.(map[string]interface{}); ok {
+			issueID := event.IssueID
+			if id, ok := payload["issue_id"].(string); ok && id != "" {
+				issueID = id
 			}
 			if issueID != "" {
 				stagesCompleted := m.stageProgress[issueID]
@@ -616,9 +616,9 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 				}
 				m.reviews[issueID] = ReviewRow{
 					IssueID:         issueID,
-					Title:           payload.Title,
-					Branch:          payload.Branch,
-					WorkspacePath:   payload.WorkspacePath,
+					Title:           stringFromMap(payload, "title"),
+					Branch:          stringFromMap(payload, "branch"),
+					WorkspacePath:   stringFromMap(payload, "workspace_path"),
 					ReadyAt:         event.Timestamp,
 					StagesCompleted: stagesCompleted,
 				}
@@ -765,34 +765,34 @@ func formatEventMessage(event types.OrchestratorEvent) (string, string) {
 	case orchestrator.EventPromptBuilt:
 		return "prompt built", "info"
 	case orchestrator.EventAgentStarted:
-		if p, ok := event.Payload.(orchestrator.AgentStartedPayload); ok {
+		if p, ok := event.Payload.(orchestrator.ProcessPayload); ok {
 			return fmt.Sprintf("[%s] agent started (pid: %d)", compactStage(p.Stage), p.PID), "info"
 		}
 		return "agent started", "info"
 	case orchestrator.EventTokensUpdated:
-		if p, ok := event.Payload.(orchestrator.TokensUpdatedPayload); ok {
+		if p, ok := event.Payload.(orchestrator.ProcessPayload); ok {
 			return fmt.Sprintf("tokens: %s/%s", formatTokensShort(p.TokensIn), formatTokensShort(p.TokensOut)), "info"
 		}
 		return "tokens updated", "info"
 	case orchestrator.EventAgentOutput:
 		return "agent output", "info"
 	case orchestrator.EventStageStarted:
-		if p, ok := event.Payload.(orchestrator.StageStartedPayload); ok {
+		if p, ok := event.Payload.(orchestrator.StagePayload); ok {
 			return fmt.Sprintf("[%s] started (attempt #%d)", compactStage(p.Stage), p.Attempt), "info"
 		}
 		return "stage started", "info"
 	case orchestrator.EventStageCompleted:
-		if p, ok := event.Payload.(orchestrator.StageCompletedPayload); ok {
+		if p, ok := event.Payload.(orchestrator.StagePayload); ok {
 			return fmt.Sprintf("[%s] completed", compactStage(p.Stage)), "success"
 		}
 		return "stage completed", "success"
 	case orchestrator.EventStageFailed:
-		if p, ok := event.Payload.(orchestrator.StageFailedPayload); ok {
+		if p, ok := event.Payload.(orchestrator.StagePayload); ok {
 			return fmt.Sprintf("[%s] failed: %s", compactStage(p.Stage), p.FailureKind), "error"
 		}
 		return "stage failed", "error"
 	case orchestrator.EventAgentFinished:
-		if p, ok := event.Payload.(orchestrator.AgentFinishedPayload); ok {
+		if p, ok := event.Payload.(orchestrator.AgentResultPayload); ok {
 			if p.Success {
 				return "agent finished", "success"
 			}
@@ -804,10 +804,7 @@ func formatEventMessage(event types.OrchestratorEvent) (string, string) {
 	case orchestrator.EventIssueCompleted:
 		return "issue completed", "success"
 	case orchestrator.EventBackoffQueued, orchestrator.EventIssueRetrying:
-		if p, ok := event.Payload.(orchestrator.BackoffQueuedPayload); ok {
-			return fmt.Sprintf("retry queued in %s (%s failed)", durationString(time.Until(p.RetryAt)), compactStage(p.Stage)), "warn"
-		}
-		if p, ok := event.Payload.(orchestrator.IssueRetryingPayload); ok {
+		if p, ok := event.Payload.(orchestrator.BackoffPayload); ok {
 			return fmt.Sprintf("retry queued in %s (%s failed)", durationString(time.Until(p.RetryAt)), compactStage(p.Stage)), "warn"
 		}
 		return "retry queued", "warn"
@@ -818,8 +815,10 @@ func formatEventMessage(event types.OrchestratorEvent) (string, string) {
 	case orchestrator.EventMergeFailed:
 		return "merge failed", "error"
 	case orchestrator.EventFetchError:
-		if p, ok := event.Payload.(orchestrator.FetchErrorPayload); ok {
-			return fmt.Sprintf("fetch error (%s): %s", p.Operation, truncate(p.Error, 40)), "error"
+		if p, ok := event.Payload.(map[string]interface{}); ok {
+			op := stringFromMap(p, "operation")
+			err := stringFromMap(p, "error")
+			return fmt.Sprintf("fetch error (%s): %s", op, truncate(err, 40)), "error"
 		}
 		return "fetch error", "error"
 	default:
@@ -954,6 +953,13 @@ func statusGlyph(status string, spinner string) string {
 	default:
 		return "○"
 	}
+}
+
+func stringFromMap(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func isActiveStatus(status string) bool {
