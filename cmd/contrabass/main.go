@@ -211,7 +211,8 @@ func (a *snapshotAdapter) Snapshot() web.Snapshot {
 
 	backoffEntries := a.orch.Backoff.GetAll()
 	backoff := make([]web.BackoffSnapshot, 0, len(backoffEntries))
-	for _, entry := range backoffEntries {
+	for i := range backoffEntries {
+		entry := &backoffEntries[i]
 		backoff = append(backoff, web.BackoffSnapshot{
 			IssueID: entry.IssueID,
 			Stage:   entry.Stage.String(),
@@ -235,6 +236,8 @@ func (a *snapshotAdapter) Snapshot() web.Snapshot {
 				})
 			}
 		}
+	} else if a.orch.Tracker != nil {
+		log.Printf("[web] tracker type %T does not implement IssuesInReview; review list will be empty", a.orch.Tracker)
 	}
 
 	return web.Snapshot{

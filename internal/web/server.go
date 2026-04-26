@@ -218,6 +218,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			data, err := json.Marshal(event)
 			if err != nil {
+				log.Printf("[web] failed to marshal event for SSE: %v", err)
 				continue
 			}
 			if err := WriteEvent(w, "orchestrator", data); err != nil {

@@ -64,17 +64,17 @@ func (b *BackoffManager) Enqueue(issueID string, attempt int, stage types.Stage,
 	return entry
 }
 
-// Ready returns entries whose retry time has passed.
-func (b *BackoffManager) Ready() []*types.BackoffEntry {
+// Ready returns value copies of entries whose retry time has passed.
+func (b *BackoffManager) Ready() []types.BackoffEntry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	now := time.Now()
-	ready := make([]*types.BackoffEntry, 0, len(b.entries))
+	ready := make([]types.BackoffEntry, 0, len(b.entries))
 
 	for _, entry := range b.entries {
 		if entry.RetryAt.Before(now) || entry.RetryAt.Equal(now) {
-			ready = append(ready, entry)
+			ready = append(ready, *entry)
 		}
 	}
 
@@ -88,13 +88,16 @@ func (b *BackoffManager) Remove(issueID string) {
 	b.mu.Unlock()
 }
 
-// Get returns an entry by issue ID and whether it exists.
-func (b *BackoffManager) Get(issueID string) (*types.BackoffEntry, bool) {
+// Get returns a copy of an entry by issue ID and whether it exists.
+func (b *BackoffManager) Get(issueID string) (types.BackoffEntry, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	entry, ok := b.entries[issueID]
-	return entry, ok
+	if !ok {
+		return types.BackoffEntry{}, false
+	}
+	return *entry, true
 }
 
 // Len returns the number of entries in the backoff queue.
@@ -105,14 +108,14 @@ func (b *BackoffManager) Len() int {
 	return len(b.entries)
 }
 
-// GetAll returns a snapshot of all backoff entries.
-func (b *BackoffManager) GetAll() []*types.BackoffEntry {
+// GetAll returns a snapshot of all backoff entries as value copies.
+func (b *BackoffManager) GetAll() []types.BackoffEntry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	result := make([]*types.BackoffEntry, 0, len(b.entries))
+	result := make([]types.BackoffEntry, 0, len(b.entries))
 	for _, entry := range b.entries {
-		result = append(result, entry)
+		result = append(result, *entry)
 	}
 	return result
 }

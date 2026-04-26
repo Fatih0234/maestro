@@ -163,6 +163,13 @@ const API_BASE = window.location.origin;
 let eventSource = null;
 let reconnectTimer = null;
 
+function escapeHtml(str) {
+  if (str == null) return '';
+  const span = document.createElement('span');
+  span.textContent = String(str);
+  return span.innerHTML;
+}
+
 function setStatus(state, text) {
   const dot = document.getElementById('statusDot');
   const txt = document.getElementById('statusText');
@@ -204,14 +211,14 @@ function renderCard(item, type) {
   if (type === 'running') {
     return `
       <div class="card">
-        <div class="card-id">${item.issue_id}</div>
-        <div class="card-title">${item.title || 'Untitled'}</div>
+        <div class="card-id">${escapeHtml(item.issue_id)}</div>
+        <div class="card-title">${escapeHtml(item.title || 'Untitled')}</div>
         <div class="card-meta">
-          <span class="badge ${badgeClass(item.stage)}">${item.stage}</span>
-          <span>Attempt ${item.attempt}</span>
-          ${item.pid ? `<span>PID ${item.pid}</span>` : ''}
+          <span class="badge ${badgeClass(item.stage)}">${escapeHtml(item.stage)}</span>
+          <span>Attempt ${escapeHtml(item.attempt)}</span>
+          ${item.pid ? `<span>PID ${escapeHtml(item.pid)}</span>` : ''}
           ${item.tokens_in > 0 || item.tokens_out > 0 ? `<span>${formatNumber(item.tokens_in)} / ${formatNumber(item.tokens_out)} tok</span>` : ''}
-          ${item.error ? `<span style="color:#f85149">${item.error}</span>` : ''}
+          ${item.error ? `<span style="color:#f85149">${escapeHtml(item.error)}</span>` : ''}
         </div>
       </div>
     `;
@@ -219,24 +226,24 @@ function renderCard(item, type) {
   if (type === 'backoff') {
     return `
       <div class="card">
-        <div class="card-id">${item.issue_id}</div>
+        <div class="card-id">${escapeHtml(item.issue_id)}</div>
         <div class="card-meta">
-          <span class="badge ${badgeClass(item.stage)}">${item.stage}</span>
-          <span>Attempt ${item.attempt}</span>
+          <span class="badge ${badgeClass(item.stage)}">${escapeHtml(item.stage)}</span>
+          <span>Attempt ${escapeHtml(item.attempt)}</span>
           <span>Retry ${formatTime(item.retry_at)}</span>
         </div>
-        ${item.error ? `<div style="margin-top:6px;font-size:0.75rem;color:#f85149">${item.error}</div>` : ''}
+        ${item.error ? `<div style="margin-top:6px;font-size:0.75rem;color:#f85149">${escapeHtml(item.error)}</div>` : ''}
       </div>
     `;
   }
   if (type === 'review') {
     return `
       <div class="card">
-        <div class="card-id">${item.issue_id}</div>
-        <div class="card-title">${item.title || 'Untitled'}</div>
+        <div class="card-id">${escapeHtml(item.issue_id)}</div>
+        <div class="card-title">${escapeHtml(item.title || 'Untitled')}</div>
         <div class="card-meta">
           <span>Ready ${formatTime(item.ready_at)}</span>
-          ${item.branch ? `<span>${item.branch}</span>` : ''}
+          ${item.branch ? `<span>${escapeHtml(item.branch)}</span>` : ''}
         </div>
       </div>
     `;
@@ -270,11 +277,12 @@ function logEvent(event) {
   const row = document.createElement('div');
   row.className = 'event';
   row.innerHTML = `
-    <span class="event-time">${time}</span>
-    <span class="event-type">${event.type}</span>
-    ${event.issue_id ? `<span class="event-issue">${event.issue_id}</span>` : '<span class="event-issue"></span>'}
-    <span class="event-payload" title="${payload}">${payload}</span>
+    <span class="event-time">${escapeHtml(time)}</span>
+    <span class="event-type">${escapeHtml(event.type)}</span>
+    ${event.issue_id ? `<span class="event-issue">${escapeHtml(event.issue_id)}</span>` : '<span class="event-issue"></span>'}
+    <span class="event-payload">${escapeHtml(payload)}</span>
   `;
+  row.querySelector('.event-payload').setAttribute('title', payload);
   log.insertBefore(row, log.firstChild);
 
   // Keep only last 50 events

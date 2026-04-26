@@ -103,14 +103,16 @@ func (m *Manager) Create(ctx context.Context, issue types.Issue) (string, error)
 	// Check if directory exists but not tracked
 	if info, err := os.Stat(workspacePath); err == nil && info.IsDir() {
 		// Verify it is a valid git worktree, not an orphaned/prunable one.
-		if m.isValidWorktree(workspacePath) {
+		if m.isValidWorktree(ctx, workspacePath) {
 			m.mu.Lock()
 			m.active[issue.ID] = workspacePath
 			m.mu.Unlock()
 			return workspacePath, nil
 		}
 		// Invalid / prunable worktree — remove directory and prune git's registry.
-		_ = os.RemoveAll(workspacePath)
+		if err := os.RemoveAll(workspacePath); err != nil {
+			return "", fmt.Errorf("remove invalid worktree directory %s: %w", workspacePath, err)
+		}
 		_, _ = m.runGit(ctx, "worktree", "prune")
 	}
 
@@ -354,7 +356,7 @@ func (m *Manager) lockIssue(issueID string) func() {
 // isValidWorktree checks whether a directory is a healthy git worktree.
 // It returns false for orphaned/prunable worktrees (missing .git file,
 // broken gitdir link, or worktree marked prunable by git).
-func (m *Manager) isValidWorktree(path string) bool {
+func (m *Manager) isValidWorktree(ctx context.Context, path string) bool {
 	// Must have a .git file (worktrees use a gitfile, not a .git directory)
 	gitFile := filepath.Join(path, ".git")
 	info, err := os.Stat(gitFile)
@@ -362,27 +364,37 @@ func (m *Manager) isValidWorktree(path string) bool {
 		return false
 	}
 
-	// The gitfile must contain a valid gitdir: line pointing to an existing path
+	// The gitfile must contain a valid gitdir: line pointing to an existing path.
+	// Only the first line is checked — .git files may contain additional lines.
 	data, err := os.ReadFile(gitFile)
 	if err != nil {
 		return false
 	}
 	const prefix = "gitdir: "
-	line := strings.TrimSpace(string(data))
-	if !strings.HasPrefix(line, prefix) {
+	firstLine := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)[0]
+	if !strings.HasPrefix(firstLine, prefix) {
 		return false
 	}
-	gitDir := strings.TrimSpace(line[len(prefix):])
+	gitDir := strings.TrimSpace(firstLine[len(prefix):])
 	if _, err := os.Stat(gitDir); err != nil {
 		return false
 	}
 
-	// Ask git whether this path is known as a valid worktree
-	output, err := m.runGit(context.Background(), "worktree", "list", "--porcelain")
+	// Ask git whether this path is known as a valid worktree.
+	// Parse porcelain output line-by-line to avoid substring false positives
+	// (e.g., /worktrees/CB-1 matching /worktrees/CB-10).
+	output, err := m.runGit(ctx, "worktree", "list", "--porcelain")
 	if err != nil {
 		return false
 	}
-	return strings.Contains(output, path)
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			if strings.TrimSpace(line[len("worktree "):]) == path {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // runGit executes a git command in the base directory.
