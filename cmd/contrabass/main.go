@@ -10,7 +10,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -35,6 +37,8 @@ var (
 	logLevel   = flag.String("log-level", "info", "log level (debug/info/warn/error)")
 	port       = flag.Int("port", 0, "HTTP API port (0 = disabled)")
 )
+
+var version = "dev"
 
 const tuiShutdownTimeout = 5 * time.Second
 
@@ -99,9 +103,42 @@ func (l *cliLogger) Errorf(format string, args ...any) {
 }
 
 func main() {
+	// --version is handled globally before any other parsing.
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" || arg == "-v" {
+			fmt.Println("contrabass", version)
+			return
+		}
+	}
+
 	// Extract --config before any dispatching so board subcommands and the
 	// orchestrator both respect it regardless of argument ordering.
 	args := extractConfigFlag(os.Args[1:])
+
+	// If the user just wants top-level help, let flag.Parse handle it.
+	if hasHelpFlag(args) && len(args) > 0 && args[0] != "init" && args[0] != "board" {
+		flag.CommandLine.SetOutput(os.Stdout)
+		flag.CommandLine.Parse(args)
+		return
+	}
+
+	// Dispatch to init subcommand before standard flag parsing.
+	// init does not need config discovery.
+	if len(args) > 0 && args[0] == "init" {
+		if err := runInit(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Resolve config path for all non-init commands.
+	resolved, err := resolveConfigPath(*configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	*configPath = resolved
 
 	// Dispatch to board subcommands before standard flag parsing so board
 	// commands can define their own flags.
@@ -135,6 +172,81 @@ func extractConfigFlag(args []string) []string {
 		}
 	}
 	return args
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			return true
+		}
+	}
+	return false
+}
+
+func findGitRoot(startDir string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = startDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", errors.New("not a git repository")
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func findProjectRoot(startDir string) (string, error) {
+	startDir, err := filepath.Abs(startDir)
+	if err != nil {
+		return "", err
+	}
+
+	gitRoot := ""
+	if gr, err := findGitRoot(startDir); err == nil {
+		gitRoot = gr
+	}
+
+	dir := startDir
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "WORKFLOW.md")); err == nil {
+			return dir, nil
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".contrabass", "WORKFLOW.md")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		if gitRoot != "" && dir == gitRoot {
+			break
+		}
+		dir = parent
+	}
+
+	if gitRoot != "" {
+		return "", fmt.Errorf("no WORKFLOW.md found in %s or its parent directories (git root: %s)", startDir, gitRoot)
+	}
+	return "", fmt.Errorf("no WORKFLOW.md found in %s or its parent directories", startDir)
+}
+
+func resolveConfigPath(flagValue string) (string, error) {
+	if flagValue != "WORKFLOW.md" {
+		abs, err := filepath.Abs(flagValue)
+		if err != nil {
+			return "", fmt.Errorf("resolve config path %q: %w", flagValue, err)
+		}
+		return abs, nil
+	}
+
+	root, err := findProjectRoot(".")
+	if err != nil {
+		return "", fmt.Errorf("%w\nhint: run from a project root, or specify --config /path/to/WORKFLOW.md", err)
+	}
+
+	primary := filepath.Join(root, "WORKFLOW.md")
+	if _, err := os.Stat(primary); err == nil {
+		return primary, nil
+	}
+	return filepath.Join(root, ".contrabass", "WORKFLOW.md"), nil
 }
 
 // buildDeps loads config and creates all core dependencies.
