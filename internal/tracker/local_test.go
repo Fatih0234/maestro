@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -668,5 +669,48 @@ func TestLocalTracker_UpdateIssueState_InReviewClearsClaimAndRetryAfter(t *testi
 	}
 	if stored.RetryAfter != nil {
 		t.Fatal("retry_after should be cleared when entering in_review")
+	}
+}
+
+// TestWriteJSONAtomic_Concurrent verifies that concurrent writes to the same
+// file via writeJSONAtomic do not collide (regression for the fixed .tmp
+// race condition).
+func TestWriteJSONAtomic_Concurrent(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "manifest.json")
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 10)
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			data := map[string]int{"version": n}
+			if err := writeJSONAtomic(path, data); err != nil {
+				errCh <- err
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	var errs []error
+	for err := range errCh {
+		errs = append(errs, err)
+	}
+	if len(errs) > 0 {
+		t.Fatalf("concurrent writeJSONAtomic produced %d errors: %v", len(errs), errs)
+	}
+
+	// Verify the final file is valid JSON
+	var result map[string]int
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read final file: %v", err)
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("final file is not valid JSON: %v", err)
 	}
 }

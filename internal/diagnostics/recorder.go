@@ -968,11 +968,22 @@ func writeJSONAtomic(path string, value any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create parent for %s: %w", path, err)
 	}
-	tmp := path + ".tmp"
+	dir, base := filepath.Split(path)
+	f, err := os.CreateTemp(dir, base+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp for %s: %w", path, err)
+	}
+	tmp := f.Name()
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close temp %s: %w", path, err)
+	}
 	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("write temp %s: %w", path, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("rename temp %s: %w", path, err)
 	}
 	return nil

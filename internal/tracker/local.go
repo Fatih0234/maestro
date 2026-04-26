@@ -564,11 +564,22 @@ func writeJSONAtomic(path string, value interface{}) error {
 		return fmt.Errorf("creating parent directory for %s: %w", path, err)
 	}
 
-	tempPath := path + ".tmp"
+	dir, base := filepath.Split(path)
+	f, err := os.CreateTemp(dir, base+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp file for %s: %w", path, err)
+	}
+	tempPath := f.Name()
+	if err := f.Close(); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("closing temp file for %s: %w", path, err)
+	}
 	if err := os.WriteFile(tempPath, append(data, '\n'), 0o644); err != nil {
+		os.Remove(tempPath)
 		return fmt.Errorf("writing temp file for %s: %w", path, err)
 	}
 	if err := os.Rename(tempPath, path); err != nil {
+		os.Remove(tempPath)
 		return fmt.Errorf("renaming temp file for %s: %w", path, err)
 	}
 
