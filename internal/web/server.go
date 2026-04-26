@@ -69,6 +69,14 @@ type Snapshot struct {
 	Stats   StatsSnapshot    `json:"stats"`
 }
 
+// WebEvent is a JSON-friendly wrapper for orchestrator events.
+type WebEvent struct {
+	Type      string          `json:"type"`
+	IssueID   string          `json:"issue_id,omitempty"`
+	Timestamp time.Time       `json:"timestamp"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
 // Server is a lightweight HTTP API for the orchestrator.
 type Server struct {
 	addr              string
