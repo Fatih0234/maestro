@@ -16,6 +16,14 @@ import (
 // Refresh interval for updating derived fields.
 const refreshInterval = time.Second
 
+// OrchestratorEventMsg wraps orchestrator events for Bubble Tea.
+type OrchestratorEventMsg struct {
+	Event types.OrchestratorEvent
+}
+
+// tickMsg is sent periodically to refresh derived fields like ages.
+type tickMsg time.Time
+
 // Model is the main Bubble Tea model for the Contrabass TUI.
 type Model struct {
 	width  int
