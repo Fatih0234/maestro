@@ -132,6 +132,16 @@ func main() {
 		return
 	}
 
+	// Dispatch to doctor subcommand before config resolution so it can
+	// diagnose missing config without failing fatally.
+	if len(args) > 0 && args[0] == "doctor" {
+		if err := runDoctor(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Resolve config path for all non-init commands.
 	resolved, err := resolveConfigPath(*configPath)
 	if err != nil {
