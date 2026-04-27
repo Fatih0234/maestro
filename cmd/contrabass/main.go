@@ -254,7 +254,7 @@ func buildDeps(configPath string) (*config.Config, types.IssueTracker, workspace
 
 	boardDir := cfg.Tracker.BoardDir
 	if boardDir == "" {
-		boardDir = ".contrabass/board"
+		boardDir = ".contrabass/projects/default/board"
 	}
 	tr := tracker.New(tracker.Config{
 		BoardDir:    boardDir,

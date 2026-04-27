@@ -90,7 +90,7 @@ agent_timeout_ms: 900000
 stall_timeout_ms: 60000
 tracker:
   type: internal
-  board_dir: .contrabass/board
+  board_dir: .contrabass/projects/default/board
   issue_prefix: CB
 agent:
   type: opencode
@@ -126,7 +126,7 @@ workspace:
 | `agent_timeout_ms` | int | 900000 | Agent timeout in ms |
 | `stall_timeout_ms` | int | 60000 | Stall detection timeout in ms |
 | `tracker.type` | string | internal | Tracker type |
-| `tracker.board_dir` | string | .contrabass/board | Local board path |
+| `tracker.board_dir` | string | .contrabass/projects/default/board | Local board path |
 | `tracker.issue_prefix` | string | CB | Issue ID prefix |
 | `agent.type` | string | opencode | Agent type |
 | `opencode.binary_path` | string | opencode serve | OpenCode binary |

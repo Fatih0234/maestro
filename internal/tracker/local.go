@@ -26,7 +26,7 @@ const (
 
 // Default paths
 const (
-	DefaultBoardDir    = ".contrabass/board"
+	DefaultBoardDir    = ".contrabass/projects/default/board"
 	DefaultIssuePrefix = "CB"
 	SchemaVersion      = "3" // v3: added in_review board state
 )
@@ -57,7 +57,7 @@ type Issue struct {
 
 // Config holds configuration for the local tracker.
 type Config struct {
-	BoardDir    string // Board directory path (default: .contrabass/board)
+	BoardDir    string // Board directory path (default: .contrabass/projects/default/board)
 	IssuePrefix string // Issue ID prefix (default: CB)
 	Actor       string // Actor name for claiming (default: current user)
 }

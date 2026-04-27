@@ -11,16 +11,18 @@ Each project owns its own board and run records. The orchestrator is a CLI tool 
 ```
 my-project/
 ├── WORKFLOW.md              ← Orchestrator config (YAML front matter + prompt template)
-├── .contrabass/             ← Git-ignored metadata
-│   ├── board/               ← Local issue tracker (file-based)
-│   │   ├── manifest.json
-│   │   └── issues/CB-*.json
-│   └── runs/                ← Persistent run diagnostics
-│       ├── _orchestrator/events.jsonl
-│       └── CB-1/
-│           ├── issue.json
-│           ├── summary.json
-│           └── attempts/001/...
+├── .contrabass/             ← Metadata (board tracked, runs gitignored)
+│   └── projects/
+│       └── my-project/
+│           ├── board/         ← Local issue tracker (file-based)
+│           │   ├── manifest.json
+│           │   └── issues/CB-*.json
+│           └── runs/          ← Persistent run diagnostics
+│               ├── _orchestrator/events.jsonl
+│               └── CB-1/
+│                   ├── issue.json
+│                   ├── summary.json
+│                   └── attempts/001/...
 ├── src/
 └── ...
 
@@ -151,7 +153,7 @@ poll_interval_ms: 30000
 
 tracker:
   type: internal
-  board_dir: .contrabass/board
+  board_dir: .contrabass/projects/default/board
   issue_prefix: CB
 
 agent:

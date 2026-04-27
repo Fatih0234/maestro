@@ -11,6 +11,7 @@ import (
 )
 
 // defaultWorkflowTemplate is the WORKFLOW.md written by `contrabass init`.
+// The %s placeholder is filled with the project name (directory basename).
 const defaultWorkflowTemplate = `---
 # Contrabass project configuration.
 # This file lives at the project root and configures how the orchestrator
@@ -32,7 +33,7 @@ agent_timeout_ms: 300000
 stall_timeout_ms: 120000
 tracker:
   type: internal
-  board_dir: .contrabass/board
+  board_dir: .contrabass/projects/%s/board
   issue_prefix: CB
 agent:
   type: opencode
@@ -58,8 +59,8 @@ workspace:
 `
 
 // runInit sets up a project for contrabass orchestration.
-// It creates .contrabass/board, writes a default WORKFLOW.md, and
-// adds .contrabass/ to .gitignore.
+// It creates .contrabass/projects/<name>/board, writes a default WORKFLOW.md, and
+// ensures run directories are gitignored.
 func runInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	force := fs.Bool("force", false, "overwrite existing .contrabass/ directory")
@@ -79,6 +80,8 @@ func runInit(args []string) error {
 		fmt.Printf("Found git root at %s. Initializing there.\n\n", gitRoot)
 	}
 
+	projectName := filepath.Base(gitRoot)
+
 	// Prevent overwriting an existing setup unless --force is given.
 	contrabassDir := filepath.Join(gitRoot, ".contrabass")
 	if _, err := os.Stat(contrabassDir); err == nil && !*force {
@@ -92,8 +95,8 @@ func runInit(args []string) error {
 		}
 	}
 
-	// Create .contrabass/board/ and manifest.json.
-	boardDir := filepath.Join(contrabassDir, "board")
+	// Create .contrabass/projects/<name>/board/ and manifest.json.
+	boardDir := filepath.Join(contrabassDir, "projects", projectName, "board")
 	if err := os.MkdirAll(boardDir, 0o755); err != nil {
 		return fmt.Errorf("create board directory: %w", err)
 	}
@@ -104,7 +107,8 @@ func runInit(args []string) error {
 	// Write WORKFLOW.md at project root if it does not already exist.
 	workflowPath := filepath.Join(gitRoot, "WORKFLOW.md")
 	if _, err := os.Stat(workflowPath); os.IsNotExist(err) {
-		if err := os.WriteFile(workflowPath, []byte(defaultWorkflowTemplate), 0o644); err != nil {
+		workflowContent := fmt.Sprintf(defaultWorkflowTemplate, projectName)
+		if err := os.WriteFile(workflowPath, []byte(workflowContent), 0o644); err != nil {
 			return fmt.Errorf("write WORKFLOW.md: %w", err)
 		}
 		fmt.Printf("Created WORKFLOW.md\n")
@@ -112,7 +116,7 @@ func runInit(args []string) error {
 		fmt.Printf("WORKFLOW.md already exists — leaving it untouched\n")
 	}
 
-	// Ensure .contrabass/ is in .gitignore.
+	// Ensure run directories are gitignored without hiding the board.
 	if err := ensureGitignore(gitRoot); err != nil {
 		return fmt.Errorf("update .gitignore: %w", err)
 	}
@@ -142,7 +146,8 @@ func writeBoardManifest(boardDir string) error {
 	return os.WriteFile(manifestPath, []byte(manifest), 0o644)
 }
 
-// ensureGitignore adds .contrabass/ to .gitignore if it is not already present.
+// ensureGitignore adds run-directory patterns to .gitignore so ephemeral
+// diagnostics are hidden while the board files remain tracked.
 func ensureGitignore(cwd string) error {
 	gitignorePath := filepath.Join(cwd, ".gitignore")
 
@@ -151,14 +156,25 @@ func ensureGitignore(cwd string) error {
 		existing = string(data)
 	}
 
-	if strings.Contains(existing, ".contrabass/") {
-		return nil // already ignored
+	entries := []string{
+		".contrabass/projects/*/runs/",
+		".contrabass/projects/*/runs.old.*",
+	}
+
+	var missing []string
+	for _, entry := range entries {
+		if !strings.Contains(existing, entry) {
+			missing = append(missing, entry)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
 	}
 
 	// If the file exists but does not end with a newline, prepend one.
-	entry := ".contrabass/\n"
+	prefix := ""
 	if len(existing) > 0 && !strings.HasSuffix(existing, "\n") {
-		entry = "\n" + entry
+		prefix = "\n"
 	}
 
 	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -167,6 +183,14 @@ func ensureGitignore(cwd string) error {
 	}
 	defer f.Close()
 
-	_, err = f.WriteString(entry)
-	return err
+	_, err = f.WriteString(prefix + "# Contrabass run diagnostics (ephemeral)\n")
+	if err != nil {
+		return err
+	}
+	for _, entry := range missing {
+		if _, err := f.WriteString(entry + "\n"); err != nil {
+			return err
+		}
+	}
+	return nil
 }

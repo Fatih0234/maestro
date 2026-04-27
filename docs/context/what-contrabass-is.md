@@ -109,7 +109,7 @@ Per-stage agent selection: `opencode.agents` maps stage names to agent names. If
 
 | Tracker | Type | Description |
 |---------|------|-------------|
-| Local Board | Internal | File-based `.contrabass/orchestrator/board/` or `.contrabass/projects/<project>/board/` |
+| Local Board | Internal | File-based `.contrabass/projects/<project>/board/` |
 
 The **Local Board** is a file-based tracker that stores issues as JSON files:
 - `.contrabass/projects/<project>/board/manifest.json` — board metadata

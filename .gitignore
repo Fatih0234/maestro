@@ -4,6 +4,7 @@ docs/references/contrabass/
 # Local agent/runtime state
 .pi/
 .contrabass/projects/*/runs/
+.contrabass/projects/*/runs.old.*
 
 # Go build outputs
 /contrabass
