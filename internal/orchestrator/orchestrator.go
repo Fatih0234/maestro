@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/config"
-	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
-	"github.com/fatihkarahan/contrabass-pi/internal/pipeline"
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
-	"github.com/fatihkarahan/contrabass-pi/internal/util"
-	"github.com/fatihkarahan/contrabass-pi/internal/workspace"
+	"github.com/fatihkarahan/maestro/internal/config"
+	"github.com/fatihkarahan/maestro/internal/diagnostics"
+	"github.com/fatihkarahan/maestro/internal/pipeline"
+	"github.com/fatihkarahan/maestro/internal/types"
+	"github.com/fatihkarahan/maestro/internal/util"
+	"github.com/fatihkarahan/maestro/internal/workspace"
 )
 
 // Orchestrator ties together tracker, workspace, and agent components.

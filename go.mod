@@ -1,4 +1,4 @@
-module github.com/fatihkarahan/contrabass-pi
+module github.com/fatihkarahan/maestro
 
 go 1.26.1
 

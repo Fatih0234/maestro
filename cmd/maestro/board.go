@@ -10,13 +10,13 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/diagnostics"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 func runBoardCommand(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: contrabass board <command> [args]\n\nCommands:\n  create  Create a new issue\n  list    List issues by state\n  show    Show issue details\n  approve Approve an issue\n  reject  Reject an issue\n  retry   Retry an issue")
+		return errors.New("usage: maestro board <command> [args]\n\nCommands:\n  create  Create a new issue\n  list    List issues by state\n  show    Show issue details\n  approve Approve an issue\n  reject  Reject an issue\n  retry   Retry an issue")
 	}
 
 	cmd := args[0]
@@ -50,7 +50,7 @@ func boardCreate(args []string) error {
 	}
 
 	if len(fs.Args()) < 1 {
-		return errors.New("usage: contrabass board create <title> [--description <desc>] [--labels <labels>]")
+		return errors.New("usage: maestro board create <title> [--description <desc>] [--labels <labels>]")
 	}
 	title := fs.Args()[0]
 
@@ -143,7 +143,7 @@ func boardList(args []string) error {
 // boardShow displays the full review package for an issue.
 func boardShow(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: contrabass board show <issue-id>")
+		return errors.New("usage: maestro board show <issue-id>")
 	}
 	issueID := args[0]
 
@@ -243,7 +243,7 @@ func boardApprove(args []string) error {
 	}
 	remaining := fs.Args()
 	if len(remaining) < 1 {
-		return errors.New("usage: contrabass board approve <issue-id> [--message \"...\"]")
+		return errors.New("usage: maestro board approve <issue-id> [--message \"...\"]")
 	}
 	issueID := remaining[0]
 
@@ -310,7 +310,7 @@ func boardReject(args []string) error {
 	}
 	remaining := fs.Args()
 	if len(remaining) < 1 {
-		return errors.New("usage: contrabass board reject <issue-id> [--message \"...\"]")
+		return errors.New("usage: maestro board reject <issue-id> [--message \"...\"]")
 	}
 	issueID := remaining[0]
 
@@ -392,7 +392,7 @@ func flagsBeforePositionals(args []string) []string {
 // boardRetry moves a retry_queued issue back to todo.
 func boardRetry(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: contrabass board retry <issue-id>")
+		return errors.New("usage: maestro board retry <issue-id>")
 	}
 	issueID := args[0]
 

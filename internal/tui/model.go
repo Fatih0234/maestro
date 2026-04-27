@@ -9,8 +9,8 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/fatihkarahan/contrabass-pi/internal/orchestrator"
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/orchestrator"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 // Refresh interval for updating derived fields.
@@ -39,7 +39,7 @@ type SessionRow struct {
 	Attempt   int
 }
 
-// Model is the main Bubble Tea model for the Contrabass TUI.
+// Model is the main Bubble Tea model for the Maestro TUI.
 type Model struct {
 	width  int
 	height int
@@ -230,7 +230,7 @@ func (m Model) renderHeader() string {
 	tokensIn := formatTokens(m.stats.TokensIn)
 	tokensOut := formatTokens(m.stats.TokensOut)
 
-	header := fmt.Sprintf("Contrabass    Running: %d/%d    Tokens: %s/%s\n",
+	header := fmt.Sprintf("Maestro    Running: %d/%d    Tokens: %s/%s\n",
 		running, maxAgents, tokensIn, tokensOut)
 
 	style := lipgloss.NewStyle().

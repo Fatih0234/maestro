@@ -25,4 +25,4 @@ jobs:
         run: go test ./...
 
       - name: Build
-        run: go build ./cmd/contrabass
+        run: go build ./cmd/maestro

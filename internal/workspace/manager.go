@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
-	"github.com/fatihkarahan/contrabass-pi/internal/util"
+	"github.com/fatihkarahan/maestro/internal/types"
+	"github.com/fatihkarahan/maestro/internal/util"
 )
 
 // WorkspaceManager interface defines the operations needed by the orchestrator.

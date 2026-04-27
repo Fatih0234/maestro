@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/agent"
-	"github.com/fatihkarahan/contrabass-pi/internal/config"
-	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
-	"github.com/fatihkarahan/contrabass-pi/internal/orchestrator"
-	"github.com/fatihkarahan/contrabass-pi/internal/tracker"
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
-	"github.com/fatihkarahan/contrabass-pi/internal/workspace"
+	"github.com/fatihkarahan/maestro/internal/agent"
+	"github.com/fatihkarahan/maestro/internal/config"
+	"github.com/fatihkarahan/maestro/internal/diagnostics"
+	"github.com/fatihkarahan/maestro/internal/orchestrator"
+	"github.com/fatihkarahan/maestro/internal/tracker"
+	"github.com/fatihkarahan/maestro/internal/types"
+	"github.com/fatihkarahan/maestro/internal/workspace"
 )
 
 func initGitRepo(t *testing.T, dir string) {

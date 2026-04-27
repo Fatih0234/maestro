@@ -1,6 +1,6 @@
-# Minimal Contrabass — Agent Context
+# Maestro — Agent Context
 
-> A minimal orchestrator for OpenCode coding agents. Poll a local board, create git worktree workspaces, dispatch agents through a plan-execute-verify pipeline, and monitor progress via Charm Bubble Tea TUI.
+> A minimal orchestrator for AI coding agents. Poll a local board, create git worktree workspaces, dispatch agents through a plan-execute-verify pipeline, and monitor progress via Charm Bubble Tea TUI.
 
 ## Current Status
 
@@ -8,7 +8,7 @@ This is a **working implementation**, not a from-scratch build. All core phases 
 
 **Deferred / out of scope:** multi-agent teams, external trackers (GitHub/Linear), web dashboard, other agent types (Codex/OMC), config hot-reload, auto-merge.
 
-For exhaustive system detail, see [PROJECT_DIGEST.md](./PROJECT_DIGEST.md). For architecture overview, see [docs/context/what-contrabass-is.md](./docs/context/what-contrabass-is.md). For implementation guide mapped to code phases, see [docs/context/minimal-contrabass.md](./docs/context/minimal-contrabass.md).
+For exhaustive system detail, see [PROJECT_DIGEST.md](./PROJECT_DIGEST.md). For architecture overview, see [docs/context/what-maestro-is.md](./docs/context/what-maestro-is.md). For implementation guide mapped to code phases, see [docs/context/minimal-maestro.md](./docs/context/minimal-maestro.md).
 
 ## Architecture — 5 Packages to Know
 
@@ -26,7 +26,7 @@ Supporting packages: `config/` (WORKFLOW.md YAML front-matter parser), `tracker/
 
 - **No auto-merge, no auto-cleanup.** The orchestrator runs plan→execute→verify, then moves the issue to `in_review` and stops. The human inspects the worktree, then approves (`done`) or rejects (`todo`) via CLI.
 - **Stage-scoped retry.** If `verify` fails, only `verify` is retried — not the whole pipeline. Exponential backoff with ±20% jitter.
-- **Everything persisted.** Every run creates a full artifact tree under `.contrabass/projects/<name>/runs/` including preflight git state, per-stage manifests/results/diffs, postflight, and review handoff/decision.
+- **Everything persisted.** Every run creates a full artifact tree under `.maestro/projects/<name>/runs/` including preflight git state, per-stage manifests/results/diffs, postflight, and review handoff/decision.
 - **Sibling worktrees.** Workspaces live outside the repo tree (`../<repo>.worktrees/CB-1/`) to keep the main repo clean.
 - **Per-stage agent selection.** `opencode.agents.plan`, `.execute`, `.verify` can point to different OpenCode agent profiles.
 - **Two extensibility interfaces:** `IssueTracker` and `AgentRunner`. Currently only `LocalTracker` and `OpenCodeRunner` are implemented, but swapping in GitHub Issues or another agent requires no orchestrator changes.
@@ -44,23 +44,23 @@ todo → in_progress → plan → execute → verify → in_review → done
 
 | Command | Description |
 |---------|-------------|
-| `contrabass init` | Set up WORKFLOW.md + `.contrabass/` board in current directory |
-| `contrabass` | Start orchestrator (TUI mode, auto-discovers WORKFLOW.md) |
-| `contrabass --no-tui` | Headless mode |
-| `contrabass --dry-run` | Single poll cycle, then exit |
-| `contrabass --log-level debug` | Verbose logging |
-| `contrabass board create "title"` | Add an issue |
-| `contrabass board list --all` | List all issues |
-| `contrabass board show CB-1` | Show issue details + review handoff |
-| `contrabass board approve CB-1 --message "LGTM"` | Mark done |
-| `contrabass board reject CB-1 --message "why"` | Return to todo |
-| `contrabass board retry CB-1` | Force retry immediately |
-| `contrabass doctor` | Environment diagnostics |
+| `maestro init` | Set up WORKFLOW.md + `.maestro/` board in current directory |
+| `maestro` | Start orchestrator (TUI mode, auto-discovers WORKFLOW.md) |
+| `maestro --no-tui` | Headless mode |
+| `maestro --dry-run` | Single poll cycle, then exit |
+| `maestro --log-level debug` | Verbose logging |
+| `maestro board create "title"` | Add an issue |
+| `maestro board list --all` | List all issues |
+| `maestro board show CB-1` | Show issue details + review handoff |
+| `maestro board approve CB-1 --message "LGTM"` | Mark done |
+| `maestro board reject CB-1 --message "why"` | Return to todo |
+| `maestro board retry CB-1` | Force retry immediately |
+| `maestro doctor` | Environment diagnostics |
 
 ## Working Conventions
 
 ### When changing code:
-1. **Always check `./docs/references/contrabass`** — the full Contrabass implementation is the reference. We are building a minimal version, but alignment with the reference design prevents drift.
+1. **Always check `./docs/references/maestro`** — the full Maestro reference implementation guides design decisions.
 2. **Follow the simplification mandate** — prefer deep modules, hide implementation details, pull complexity downward, split with caution, use precise names, kill dead code, navigate shallowly (no `a.getB().getC().doThing()`).
 3. **Tests must pass before and after.** Run `make test` or `go test ./...`. The fake runner provides deterministic scripted agent behavior for orchestrator and pipeline tests.
 4. **Use `edit` for surgical changes** — old text must match exactly. Use `write` only for new files or complete rewrites.
@@ -69,11 +69,11 @@ todo → in_progress → plan → execute → verify → in_review → done
 ### Testing
 ```bash
 make test      # go test ./...
-make build     # builds ./contrabass
+make build     # builds ./maestro
 make install   # go install to $GOPATH/bin
 make clean     # remove binary
 ```
 
 ## CI
 
-`.github/workflows/ci.yml` runs `go test ./...` and `go build ./cmd/contrabass` on every push and pull request. This is standard GitHub Actions configuration and must remain tracked in git.
+`.github/workflows/ci.yml` runs `go test ./...` and `go build ./cmd/maestro` on every push and pull request. This is standard GitHub Actions configuration and must remain tracked in git.

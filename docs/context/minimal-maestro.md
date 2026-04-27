@@ -1,10 +1,10 @@
-# Minimal Contrabass for OpenCode
+# Minimal Maestro for OpenCode
 
 > A minimal orchestrator for OpenCode coding agents with local board tracker, persistent run diagnostics, and an orchestrator-owned pipeline.
 
 ## Scope
 
-This is a stripped-down version of Contrabass that focuses on:
+This is a stripped-down version of Maestro that focuses on:
 - ✅ Single-agent orchestrator (no team system)
 - ✅ Orchestrator-owned pipeline: **plan → execute → verify → human review**
 - ✅ Local board tracker (file-based, no external service)
@@ -34,7 +34,7 @@ No external dependencies beyond OpenCode, Git, and Go.
 ```
 .
 ├── cmd/
-│   └── contrabass/
+│   └── maestro/
 │       └── main.go           # CLI entry, TUI, headless modes
 ├── internal/
 │   ├── config/
@@ -68,10 +68,10 @@ No external dependencies beyond OpenCode, Git, and Go.
 │   └── util/
 │       └── strings.go        # String utilities
 ├── docs/
-│   ├── context/              # Implementation guides (this file, what-contrabass-is.md)
+│   ├── context/              # Implementation guides (this file, what-maestro-is.md)
 │   ├── specs/
 │   │   └── orchestrator-owned-pipeline/  # Authoritative pipeline spec
-│   └── references/contrabass/ # Reference implementation
+│   └── references/maestro/ # Reference implementation
 └── go.mod
 ```
 
@@ -90,7 +90,7 @@ agent_timeout_ms: 900000
 stall_timeout_ms: 60000
 tracker:
   type: internal
-  board_dir: .contrabass/projects/default/board
+  board_dir: .maestro/projects/default/board
   issue_prefix: CB
 agent:
   type: opencode
@@ -126,7 +126,7 @@ workspace:
 | `agent_timeout_ms` | int | 900000 | Agent timeout in ms |
 | `stall_timeout_ms` | int | 60000 | Stall detection timeout in ms |
 | `tracker.type` | string | internal | Tracker type |
-| `tracker.board_dir` | string | .contrabass/projects/default/board | Local board path |
+| `tracker.board_dir` | string | .maestro/projects/default/board | Local board path |
 | `tracker.issue_prefix` | string | CB | Issue ID prefix |
 | `agent.type` | string | opencode | Agent type |
 | `opencode.binary_path` | string | opencode serve | OpenCode binary |
@@ -148,7 +148,7 @@ File-based issue storage inside each project:
 ```
 my-project/
 ├── WORKFLOW.md              # Orchestrator config
-└── .contrabass/
+└── .maestro/
     └── board/               # Issues for this project
         ├── manifest.json
         └── issues/
@@ -193,12 +193,12 @@ Issue states serialize as string labels (`todo`, `in_progress`, etc.) rather tha
 
 ### 3. Runtime Records
 
-The recorder stores run diagnostics in `.contrabass/runs/` (sibling to the board directory).
+The recorder stores run diagnostics in `.maestro/runs/` (sibling to the board directory).
 
 Typical contents:
 
 ```bash
-.contrabass/runs/
+.maestro/runs/
 ├── _orchestrator/
 │   └── events.jsonl
 └── CB-1/
@@ -483,7 +483,7 @@ Issue     Title                      Stage   PID        Tokens     Age   Attempt
 19. **End-to-end smoke** — `in_review` and `done` paths
 
 ### Phase 6: Docs and migration notes
-20. **Update implementation docs** — this file, what-contrabass-is.md, README.md
+20. **Update implementation docs** — this file, what-maestro-is.md, README.md
 21. **Migration notes** — what changed from single-stage to pipeline
 22. **Spec alignment** — ensure docs link to `docs/specs/orchestrator-owned-pipeline/`
 
@@ -624,23 +624,23 @@ type OrchestratorEvent struct {
 ## CLI Interface
 
 ```bash
-# Initialize a project (creates .contrabass/ + WORKFLOW.md)
-contrabass init
+# Initialize a project (creates .maestro/ + WORKFLOW.md)
+maestro init
 
-# Run with TUI (auto-discovers WORKFLOW.md or .contrabass/WORKFLOW.md)
-contrabass
+# Run with TUI (auto-discovers WORKFLOW.md or .maestro/WORKFLOW.md)
+maestro
 
 # Run with explicit config
-contrabass --config WORKFLOW.md
+maestro --config WORKFLOW.md
 
 # Run headless
-contrabass --no-tui
+maestro --no-tui
 
 # Run with custom log level
-contrabass --log-level debug
+maestro --log-level debug
 
 # Dry run (exactly one poll cycle, then exit)
-contrabass --dry-run
+maestro --dry-run
 ```
 
 ## Future Extensions (Out of Scope)
@@ -655,4 +655,4 @@ When ready to add:
 ## Similar Projects
 
 - [OpenAI Symphony](https://github.com/openai/symphony) — Original Elixir implementation
-- [Contrabass](https://github.com/junhoyeo/contrabass) — Full Go implementation (this is derived from)
+- [Maestro](https://github.com/junhoyeo/maestro) — Full Go implementation (this is derived from)

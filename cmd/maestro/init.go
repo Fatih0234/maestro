@@ -10,21 +10,21 @@ import (
 	"time"
 )
 
-// defaultWorkflowTemplate is the WORKFLOW.md written by `contrabass init`.
+// defaultWorkflowTemplate is the WORKFLOW.md written by `maestro init`.
 // The %s placeholder is filled with the project name (directory basename).
 const defaultWorkflowTemplate = `---
-# Contrabass project configuration.
+# Maestro project configuration.
 # This file lives at the project root and configures how the orchestrator
 # runs on this repository.
 #
 # How to create issues:
-#   contrabass board create "Fix the login bug" --description "Details..."
+#   maestro board create "Fix the login bug" --description "Details..."
 #
 # How to list all issues:
-#   contrabass board list --all
+#   maestro board list --all
 #
 # How to start the orchestrator:
-#   contrabass
+#   maestro
 
 max_concurrency: 1
 poll_interval_ms: 3000
@@ -33,7 +33,7 @@ agent_timeout_ms: 300000
 stall_timeout_ms: 120000
 tracker:
   type: internal
-  board_dir: .contrabass/projects/%s/board
+  board_dir: .maestro/projects/%s/board
   issue_prefix: CB
 agent:
   type: opencode
@@ -48,7 +48,7 @@ opencode:
   #   verify: verify
 workspace:
   base_dir: .
-  branch_prefix: contrabass/
+  branch_prefix: maestro/
 ---
 
 # Task
@@ -58,12 +58,12 @@ workspace:
 {{ issue.description }}
 `
 
-// runInit sets up a project for contrabass orchestration.
-// It creates .contrabass/projects/<name>/board, writes a default WORKFLOW.md, and
+// runInit sets up a project for maestro orchestration.
+// It creates .maestro/projects/<name>/board, writes a default WORKFLOW.md, and
 // ensures run directories are gitignored.
 func runInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	force := fs.Bool("force", false, "overwrite existing .contrabass/ directory")
+	force := fs.Bool("force", false, "overwrite existing .maestro/ directory")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -83,20 +83,20 @@ func runInit(args []string) error {
 	projectName := filepath.Base(gitRoot)
 
 	// Prevent overwriting an existing setup unless --force is given.
-	contrabassDir := filepath.Join(gitRoot, ".contrabass")
-	if _, err := os.Stat(contrabassDir); err == nil && !*force {
-		return errors.New(".contrabass/ already exists — run `contrabass init --force` to overwrite")
+	maestroDir := filepath.Join(gitRoot, ".maestro")
+	if _, err := os.Stat(maestroDir); err == nil && !*force {
+		return errors.New(".maestro/ already exists — run `maestro init --force` to overwrite")
 	}
 
 	// When forcing, remove the old directory so we start fresh.
 	if *force {
-		if err := os.RemoveAll(contrabassDir); err != nil {
-			return fmt.Errorf("remove existing .contrabass/: %w", err)
+		if err := os.RemoveAll(maestroDir); err != nil {
+			return fmt.Errorf("remove existing .maestro/: %w", err)
 		}
 	}
 
-	// Create .contrabass/projects/<name>/board/ and manifest.json.
-	boardDir := filepath.Join(contrabassDir, "projects", projectName, "board")
+	// Create .maestro/projects/<name>/board/ and manifest.json.
+	boardDir := filepath.Join(maestroDir, "projects", projectName, "board")
 	if err := os.MkdirAll(boardDir, 0o755); err != nil {
 		return fmt.Errorf("create board directory: %w", err)
 	}
@@ -121,13 +121,13 @@ func runInit(args []string) error {
 		return fmt.Errorf("update .gitignore: %w", err)
 	}
 
-	fmt.Printf("\nInitialized contrabass in %s\n", gitRoot)
+	fmt.Printf("\nInitialized maestro in %s\n", gitRoot)
 	fmt.Printf("  board:        %s\n", boardDir)
 	fmt.Printf("  workflow:     %s\n", workflowPath)
 	fmt.Printf("\nNext steps:\n")
 	fmt.Printf("  1. Edit WORKFLOW.md to set your OpenCode profile and agent\n")
-	fmt.Printf("  2. Run `contrabass board create \"<title>\"` to add an issue\n")
-	fmt.Printf("  3. Run `contrabass` to start the orchestrator\n")
+	fmt.Printf("  2. Run `maestro board create \"<title>\"` to add an issue\n")
+	fmt.Printf("  3. Run `maestro` to start the orchestrator\n")
 	return nil
 }
 
@@ -157,8 +157,8 @@ func ensureGitignore(cwd string) error {
 	}
 
 	entries := []string{
-		".contrabass/projects/*/runs/",
-		".contrabass/projects/*/runs.old.*",
+		".maestro/projects/*/runs/",
+		".maestro/projects/*/runs.old.*",
 	}
 
 	var missing []string
@@ -183,7 +183,7 @@ func ensureGitignore(cwd string) error {
 	}
 	defer f.Close()
 
-	_, err = f.WriteString(prefix + "# Contrabass run diagnostics (ephemeral)\n")
+	_, err = f.WriteString(prefix + "# Maestro run diagnostics (ephemeral)\n")
 	if err != nil {
 		return err
 	}

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/config"
-	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
-	"github.com/fatihkarahan/contrabass-pi/internal/tracker"
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/config"
+	"github.com/fatihkarahan/maestro/internal/diagnostics"
+	"github.com/fatihkarahan/maestro/internal/tracker"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 // setupTestBoard creates a temporary board with a config file and returns

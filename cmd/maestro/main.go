@@ -1,4 +1,4 @@
-// Package main is the CLI entry point for Contrabass.
+// Package main is the CLI entry point for Maestro.
 package main
 
 import (
@@ -17,14 +17,14 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/fatihkarahan/contrabass-pi/internal/agent"
-	"github.com/fatihkarahan/contrabass-pi/internal/config"
-	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
-	"github.com/fatihkarahan/contrabass-pi/internal/orchestrator"
-	"github.com/fatihkarahan/contrabass-pi/internal/tracker"
-	"github.com/fatihkarahan/contrabass-pi/internal/tui"
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
-	"github.com/fatihkarahan/contrabass-pi/internal/workspace"
+	"github.com/fatihkarahan/maestro/internal/agent"
+	"github.com/fatihkarahan/maestro/internal/config"
+	"github.com/fatihkarahan/maestro/internal/diagnostics"
+	"github.com/fatihkarahan/maestro/internal/orchestrator"
+	"github.com/fatihkarahan/maestro/internal/tracker"
+	"github.com/fatihkarahan/maestro/internal/tui"
+	"github.com/fatihkarahan/maestro/internal/types"
+	"github.com/fatihkarahan/maestro/internal/workspace"
 )
 
 var (
@@ -102,7 +102,7 @@ func main() {
 	// --version is handled globally before any other parsing.
 	for _, arg := range os.Args[1:] {
 		if arg == "--version" || arg == "-v" {
-			fmt.Println("contrabass", version)
+			fmt.Println("maestro", version)
 			return
 		}
 	}
@@ -205,7 +205,7 @@ func findProjectRoot(startDir string) (string, error) {
 		if _, err := os.Stat(filepath.Join(dir, "WORKFLOW.md")); err == nil {
 			return dir, nil
 		}
-		if _, err := os.Stat(filepath.Join(dir, ".contrabass", "WORKFLOW.md")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, ".maestro", "WORKFLOW.md")); err == nil {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
@@ -242,7 +242,7 @@ func resolveConfigPath(flagValue string) (string, error) {
 	if _, err := os.Stat(primary); err == nil {
 		return primary, nil
 	}
-	return filepath.Join(root, ".contrabass", "WORKFLOW.md"), nil
+	return filepath.Join(root, ".maestro", "WORKFLOW.md"), nil
 }
 
 // buildDeps loads config and creates all core dependencies.
@@ -254,7 +254,7 @@ func buildDeps(configPath string) (*config.Config, types.IssueTracker, workspace
 
 	boardDir := cfg.Tracker.BoardDir
 	if boardDir == "" {
-		boardDir = ".contrabass/projects/default/board"
+		boardDir = ".maestro/projects/default/board"
 	}
 	tr := tracker.New(tracker.Config{
 		BoardDir:    boardDir,
@@ -288,7 +288,7 @@ func run() error {
 	}
 	defer recorder.Close()
 
-	logger.Infof("Starting Contrabass with config: %s", *configPath)
+	logger.Infof("Starting Maestro with config: %s", *configPath)
 	logger.Infof("  max_concurrency: %d", cfg.MaxConcurrency)
 	logger.Infof("  poll_interval: %dms", cfg.PollIntervalMs)
 

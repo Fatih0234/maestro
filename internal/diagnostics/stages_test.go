@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 func TestRecorder_StageArtifactsAdvanceSummary(t *testing.T) {
 	tmpDir := t.TempDir()
-	boardDir := filepath.Join(tmpDir, ".contrabass", "projects", "contrabass-snake", "board")
+	boardDir := filepath.Join(tmpDir, ".maestro", "projects", "maestro-snake", "board")
 
 	recorder, err := NewRecorder(boardDir)
 	if err != nil {
@@ -162,7 +162,7 @@ func TestRecorder_StageArtifactsAdvanceSummary(t *testing.T) {
 
 func TestRecorder_ReviewArtifactsPersistAcrossRecorderRestart(t *testing.T) {
 	tmpDir := t.TempDir()
-	boardDir := filepath.Join(tmpDir, ".contrabass", "projects", "contrabass-snake", "board")
+	boardDir := filepath.Join(tmpDir, ".maestro", "projects", "maestro-snake", "board")
 
 	recorder, err := NewRecorder(boardDir)
 	if err != nil {

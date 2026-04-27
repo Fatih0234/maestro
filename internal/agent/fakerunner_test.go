@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 func TestFakeRunner_StartCalls(t *testing.T) {

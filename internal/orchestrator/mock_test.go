@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 // MockAgentRunner is a mock implementation of AgentRunner for testing.

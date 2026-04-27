@@ -2,7 +2,7 @@
 package agent
 
 import (
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 // Event type constants for agent events

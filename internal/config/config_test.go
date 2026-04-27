@@ -34,7 +34,7 @@ func TestValidate_OpenCodeProfileNotFound(t *testing.T) {
 		PollIntervalMs: 1000,
 		Tracker: TrackerConfig{
 			Type:        "internal",
-			BoardDir:    ".contrabass/projects/default/board",
+			BoardDir:    ".maestro/projects/default/board",
 			IssuePrefix: "CB",
 		},
 		Agent: AgentConfig{
@@ -59,7 +59,7 @@ func TestValidate_OpenCodeProfileExists(t *testing.T) {
 		PollIntervalMs: 1000,
 		Tracker: TrackerConfig{
 			Type:        "internal",
-			BoardDir:    ".contrabass/projects/default/board",
+			BoardDir:    ".maestro/projects/default/board",
 			IssuePrefix: "CB",
 		},
 		Agent: AgentConfig{
@@ -86,7 +86,7 @@ func TestValidate_OpenCodeProfileEmptyIsValid(t *testing.T) {
 		PollIntervalMs: 1000,
 		Tracker: TrackerConfig{
 			Type:        "internal",
-			BoardDir:    ".contrabass/projects/default/board",
+			BoardDir:    ".maestro/projects/default/board",
 			IssuePrefix: "CB",
 		},
 		Agent: AgentConfig{
@@ -110,7 +110,7 @@ max_concurrency: 3
 poll_interval_ms: 2000
 tracker:
   type: internal
-  board_dir: .contrabass/projects/default/board
+  board_dir: .maestro/projects/default/board
   issue_prefix: CB
 agent:
   type: opencode

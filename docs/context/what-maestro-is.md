@@ -1,14 +1,14 @@
-# What Contrabass Is
+# What Maestro Is
 
 > A project-level orchestrator for AI coding agents — manage work, not agents
 
-Contrabass is a Go reimplementation of OpenAI's Symphony with a Charm TUI stack. It orchestrates coding agents against an issue tracker and visualizes progress in a terminal UI built with the Charm ecosystem.
+Maestro is a Go reimplementation of OpenAI's Symphony with a Charm TUI stack. It orchestrates coding agents against an issue tracker and visualizes progress in a terminal UI built with the Charm ecosystem.
 
 > Note: this repository currently implements the minimal single-agent slice only: local board tracking, sibling worktree management, the OpenCode runner, persistent diagnostics, and the Charm TUI. Team mode, external trackers, and the web dashboard are deferred.
 
 ## Core Concept
 
-Contrabass operates on **issues** (tasks to be done) rather than directly on agents. The orchestrator:
+Maestro operates on **issues** (tasks to be done) rather than directly on agents. The orchestrator:
 1. Polls an issue tracker for unclaimed issues
 2. Claims an issue and creates a workspace (git worktree)
 3. Runs the **plan → execute → verify** pipeline, one stage at a time
@@ -44,7 +44,7 @@ Contrabass operates on **issues** (tasks to be done) rather than directly on age
 │  └── Verify stage (reviewer-style validation)                   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Diagnostics + UI                                               │
-│  ├── Run records (`.contrabass/projects/<project>/runs/`)       │
+│  ├── Run records (`.maestro/projects/<project>/runs/`)       │
 │  │   ├── stages/plan/manifest.json + result.json                │
 │  │   ├── stages/execute/manifest.json + diff.patch              │
 │  │   ├── stages/verify/manifest.json + result.json              │
@@ -109,19 +109,19 @@ Per-stage agent selection: `opencode.agents` maps stage names to agent names. If
 
 | Tracker | Type | Description |
 |---------|------|-------------|
-| Local Board | Internal | File-based `.contrabass/projects/<project>/board/` |
+| Local Board | Internal | File-based `.maestro/projects/<project>/board/` |
 
 The **Local Board** is a file-based tracker that stores issues as JSON files:
-- `.contrabass/projects/<project>/board/manifest.json` — board metadata
-- `.contrabass/projects/<project>/board/issues/CB-1.json` — individual issue
-- `.contrabass/projects/<project>/runs/` — persistent run diagnostics and attempt snapshots
+- `.maestro/projects/<project>/board/manifest.json` — board metadata
+- `.maestro/projects/<project>/board/issues/CB-1.json` — individual issue
+- `.maestro/projects/<project>/runs/` — persistent run diagnostics and attempt snapshots
 
 States: `todo`, `in_progress`, `retry_queued`, `in_review`, `done`
 
 ### 3. Workspace Manager (`internal/workspace/`)
 
 Creates git worktrees per issue:
-- Path: sibling worktree dir outside the repo tree (for example `../contrabass-snake.worktrees/CB-1/`)
+- Path: sibling worktree dir outside the repo tree (for example `../maestro-snake.worktrees/CB-1/`)
 - Uses `git worktree add` to create isolated branches
 - Tracks active workspaces in memory
 - Leaves worktrees intact after runtime success for human review
@@ -195,7 +195,7 @@ Bubble Tea UI that shows:
 1. Parse `WORKFLOW.md` → `WorkflowConfig`
 2. Create tracker (local board)
 3. Create workspace manager (sibling worktree dir)
-4. Create diagnostics recorder (writes `.contrabass/projects/<project>/runs/`)
+4. Create diagnostics recorder (writes `.maestro/projects/<project>/runs/`)
 5. Create OpenCode runner
 6. Run orchestrator loop:
    - poll tracker for issues
@@ -213,16 +213,16 @@ Bubble Tea UI that shows:
 
 ```bash
 # Run with TUI
-./contrabass --config WORKFLOW.md
+./maestro --config WORKFLOW.md
 
 # Run headless
-./contrabass --config WORKFLOW.md --no-tui
+./maestro --config WORKFLOW.md --no-tui
 
 # Run with custom log level
-./contrabass --config WORKFLOW.md --log-level debug
+./maestro --config WORKFLOW.md --log-level debug
 
 # Dry run (exactly one poll cycle, then exit)
-./contrabass --config WORKFLOW.md --dry-run
+./maestro --config WORKFLOW.md --dry-run
 ```
 
 - `--config` loads the workflow file (defaults to `WORKFLOW.md`)
@@ -240,8 +240,8 @@ Bubble Tea UI that shows:
 ## File Structure
 
 ```
-contrabass/
-├── cmd/contrabass/          # CLI entry point
+maestro/
+├── cmd/maestro/          # CLI entry point
 ├── internal/
 │   ├── agent/               # Agent runners
 │   ├── config/              # Config parsing
@@ -255,7 +255,7 @@ contrabass/
 └── docs/
     ├── context/             # Implementation context
     ├── specs/               # Design specs
-    └── references/contrabass/  # Reference implementation
+    └── references/maestro/  # Reference implementation
 ```
 
 ## Key Dependencies

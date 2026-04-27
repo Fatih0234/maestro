@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 func TestRecorder_BeginAttemptCreatesIssueAndAttemptArtifacts(t *testing.T) {
 	tmpDir := t.TempDir()
-	boardDir := filepath.Join(tmpDir, ".contrabass", "projects", "contrabass-snake", "board")
+	boardDir := filepath.Join(tmpDir, ".maestro", "projects", "maestro-snake", "board")
 
 	recorder, err := NewRecorder(boardDir)
 	if err != nil {
@@ -37,7 +37,7 @@ func TestRecorder_BeginAttemptCreatesIssueAndAttemptArtifacts(t *testing.T) {
 		t.Fatalf("EnsureIssue() error = %v", err)
 	}
 
-	attempt, err := recorder.BeginAttempt(issue, 1, "contrabass/CB-1", "/tmp/worktree/CB-1", "prompt text", "status snapshot", "worktree snapshot")
+	attempt, err := recorder.BeginAttempt(issue, 1, "maestro/CB-1", "/tmp/worktree/CB-1", "prompt text", "status snapshot", "worktree snapshot")
 	if err != nil {
 		t.Fatalf("BeginAttempt() error = %v", err)
 	}
@@ -134,7 +134,7 @@ func TestRecorder_BeginAttemptCreatesIssueAndAttemptArtifacts(t *testing.T) {
 
 func TestRecorder_FinalizeAttempt_AwaitingReviewSetsReviewState(t *testing.T) {
 	tmpDir := t.TempDir()
-	boardDir := filepath.Join(tmpDir, ".contrabass", "projects", "contrabass-snake", "board")
+	boardDir := filepath.Join(tmpDir, ".maestro", "projects", "maestro-snake", "board")
 
 	recorder, err := NewRecorder(boardDir)
 	if err != nil {
@@ -155,7 +155,7 @@ func TestRecorder_FinalizeAttempt_AwaitingReviewSetsReviewState(t *testing.T) {
 		t.Fatalf("EnsureIssue() error = %v", err)
 	}
 
-	if _, err := recorder.BeginAttempt(issue, 1, "contrabass/CB-9", "/tmp/worktree/CB-9", "prompt", "status", "worktree"); err != nil {
+	if _, err := recorder.BeginAttempt(issue, 1, "maestro/CB-9", "/tmp/worktree/CB-9", "prompt", "status", "worktree"); err != nil {
 		t.Fatalf("BeginAttempt() error = %v", err)
 	}
 

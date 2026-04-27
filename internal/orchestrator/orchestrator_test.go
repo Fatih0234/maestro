@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/config"
-	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
-	"github.com/fatihkarahan/contrabass-pi/internal/workspace"
+	"github.com/fatihkarahan/maestro/internal/config"
+	"github.com/fatihkarahan/maestro/internal/diagnostics"
+	"github.com/fatihkarahan/maestro/internal/types"
+	"github.com/fatihkarahan/maestro/internal/workspace"
 )
 
 // testConfig creates a config for testing with sensible defaults.

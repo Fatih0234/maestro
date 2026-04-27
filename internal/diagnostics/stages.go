@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 // readJSONFile reads and unmarshals a JSON file from disk.
@@ -752,7 +752,7 @@ func DefaultReviewer() string {
 	if reviewer := strings.TrimSpace(os.Getenv("USERNAME")); reviewer != "" {
 		return reviewer
 	}
-	return "contrabass"
+	return "maestro"
 }
 
 func reviewStateForDecision(decision types.ReviewDecisionKind) types.ReviewState {

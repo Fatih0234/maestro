@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 // FakeRunner is a deterministic, scripted agent runner for testing.

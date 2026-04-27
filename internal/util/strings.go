@@ -4,7 +4,7 @@ package util
 import (
 	"strings"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 // SanitizeBranchName sanitizes an issue ID for use in a git branch name.

@@ -5,7 +5,7 @@ package orchestrator
 import (
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 // OrchestratorEvent type constants for high-level orchestrator events.

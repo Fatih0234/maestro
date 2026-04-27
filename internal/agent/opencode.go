@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/diagnostics"
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/diagnostics"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 // SSE event parsed from server stream

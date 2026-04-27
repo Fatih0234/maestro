@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/config"
+	"github.com/fatihkarahan/maestro/internal/config"
 )
 
 func TestParseLogLevel(t *testing.T) {

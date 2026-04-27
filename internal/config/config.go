@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// Config holds all configuration for the Contrabass orchestrator.
+// Config holds all configuration for the Maestro orchestrator.
 type Config struct {
 	// Concurrency settings
 	MaxConcurrency    int `yaml:"max_concurrency"`    // Max concurrent agents (default: 3)
@@ -76,7 +76,7 @@ func DefaultConfig() *Config {
 		MaxRetryBackoffMs: 240000,
 		Tracker: TrackerConfig{
 			Type:        "internal",
-			BoardDir:    ".contrabass/projects/default/board",
+			BoardDir:    ".maestro/projects/default/board",
 			IssuePrefix: "CB",
 		},
 		Agent: AgentConfig{

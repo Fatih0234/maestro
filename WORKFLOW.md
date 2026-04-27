@@ -6,18 +6,18 @@ agent_timeout_ms: 300000
 stall_timeout_ms: 120000
 tracker:
   type: internal
-  board_dir: .contrabass/projects/contrabass-snake/board
+  board_dir: .maestro/projects/maestro-snake/board
   issue_prefix: CB
 agent:
   type: opencode
 opencode:
   binary_path: opencode serve
   port: 0
-  profile: contrabass
+  profile: maestro
   agent: build
 workspace:
-  base_dir: /Volumes/T7/projects/contrabass-snake
-  branch_prefix: contrabass/
+  base_dir: /Volumes/T7/projects/maestro-snake
+  branch_prefix: maestro/
 ---
 
 # Task Assignment

@@ -1,4 +1,4 @@
-# Contrabass-PI — Project Digest
+# Maestro — Project Digest
 
 > A video-ready walkthrough of the entire system: what it is, what parts it has, what each part does, and the full workflow from startup to shutdown.
 
@@ -6,7 +6,7 @@
 
 ## 1. What Is This?
 
-Contrabass-PI is a **minimal orchestrator for AI coding agents**. It sits between you (the developer) and an AI coding agent (OpenCode). You write issues in a local board, and Contrabass feeds them one-by-one through a three-stage pipeline — **plan → execute → verify** — using isolated git worktrees. When all stages pass, the issue lands in `in_review` for you to inspect and approve/reject manually.
+Maestro is a **minimal orchestrator for AI coding agents**. It sits between you (the developer) and an AI coding agent (OpenCode). You write issues in a local board, and Maestro feeds them one-by-one through a three-stage pipeline — **plan → execute → verify** — using isolated git worktrees. When all stages pass, the issue lands in `in_review` for you to inspect and approve/reject manually.
 
 Think of it as a **CI-like loop for AI-generated code**, but with a human review gate instead of auto-merge.
 
@@ -21,9 +21,9 @@ Think of it as a **CI-like loop for AI-generated code**, but with a human review
 ## 2. The Folder Structure (High-Level)
 
 ```
-contrabass-pi/
+maestro/
 │
-├── cmd/contrabass/           # CLI entry point (main.go, board.go, init.go)
+├── cmd/maestro/           # CLI entry point (main.go, board.go, init.go)
 │
 ├── internal/
 │   ├── types/                # Core data types shared across all packages
@@ -65,7 +65,7 @@ contrabass-pi/
 │       └── strings.go        #   SanitizeBranchName, ExpandPrompt (template substitution)
 │
 ├── docs/
-│   └── context/              # Architecture docs (what-contrabass-is.md, minimal-contrabass.md)
+│   └── context/              # Architecture docs (what-maestro-is.md, minimal-maestro.md)
 │
 ├── WORKFLOW.md               # Default config for the orchestrator (YAML front matter + prompt template)
 ├── Makefile                  # build, install, test, clean
@@ -79,22 +79,22 @@ contrabass-pi/
 
 ## 3. The Artifacts — What Gets Created
 
-### 3.1 At init time (`contrabass init`)
+### 3.1 At init time (`maestro init`)
 
 ```
 project-root/
 ├── WORKFLOW.md                          # Config + prompt template
-└── .contrabass/
+└── .maestro/
     └── projects/<name>/
         └── board/
             ├── manifest.json            # Board metadata (schema version, next issue number)
             └── issues/                  # Empty initially
 ```
 
-### 3.2 When you create an issue (`contrabass board create "..."`)
+### 3.2 When you create an issue (`maestro board create "..."`)
 
 ```
-.contrabass/projects/<name>/board/
+.maestro/projects/<name>/board/
 └── issues/
     └── CB-1.json                        # {id, title, description, state: "todo", labels, ...}
 ```
@@ -105,13 +105,13 @@ Workspaces are created as **sibling directories outside the repo**:
 
 ```
 ../<repo>.worktrees/
-└── CB-1/                                # git worktree on branch contrabass/CB-1
+└── CB-1/                                # git worktree on branch maestro/CB-1
 ```
 
 Run diagnostics are persisted **beside the board**:
 
 ```
-.contrabass/projects/<name>/
+.maestro/projects/<name>/
 ├── board/                               # (issues live here)
 └── runs/                                # Run diagnostics
     ├── _orchestrator/
@@ -191,7 +191,7 @@ Parses the YAML front matter from `WORKFLOW.md` into a `Config` struct. The mark
 
 ### 4.3 `internal/tracker/` — Local Board
 
-A file-based issue tracker. Issues are JSON files in `.contrabass/projects/<name>/board/issues/`.
+A file-based issue tracker. Issues are JSON files in `.maestro/projects/<name>/board/issues/`.
 
 **Operations:**
 - `FetchIssues()` → all non-terminal issues (excludes `done` and `in_review`, filters `retry_queued` by `retry_after`)
@@ -388,7 +388,7 @@ Built with Charm's Bubble Tea framework. Shows four sections:
 3. Config.Load() → parse YAML front matter, validate, resolve paths
 4. Create tracker.LocalTracker (file-based board)
 5. Create workspace.Manager (sibling worktree dir)
-6. Create diagnostics.Recorder (writes to .contrabass/projects/<name>/runs/)
+6. Create diagnostics.Recorder (writes to .maestro/projects/<name>/runs/)
 7. Create agent.OpenCodeRunner (binary path, profile, agent config)
 8. Create orchestrator.Orchestrator (wires everything together)
 9. Set recorder on orchestrator
@@ -477,22 +477,22 @@ startRun(issue, attempt, startStage)
 ### 5.4 Human Review Flow
 
 ```
-1. User runs: contrabass board list --all
+1. User runs: maestro board list --all
    → sees CB-1 in "in_review" state
 
-2. User runs: contrabass board show CB-1
+2. User runs: maestro board show CB-1
    → sees issue details, stage completion, review handoff, workspace path
 
 3. User inspects the worktree at ../<repo>.worktrees/CB-1/
    → reviews the diff, runs tests, makes manual edits if needed
 
 4. User makes decision:
-   ├── contrabass board approve CB-1 --message "LGTM"
+   ├── maestro board approve CB-1 --message "LGTM"
    │   ├── UpdateIssueState → done
    │   ├── Write review/decision.json (approved)
    │   └── Done! Issue is closed.
    │
-   └── contrabass board reject CB-1 --message "Needs more tests"
+   └── maestro board reject CB-1 --message "Needs more tests"
        ├── UpdateIssueState → todo
        ├── Write review/decision.json (rejected)
        └── Issue goes back to the pool for a new attempt from plan
@@ -668,16 +668,16 @@ Currently only `LocalTracker` and `OpenCodeRunner` are implemented, but the desi
 
 | Task | Command |
 |------|---------|
-| Initialize a project | `contrabass init` |
-| Add an issue | `contrabass board create "Fix bug"` |
-| List all issues | `contrabass board list --all` |
-| Show issue details | `contrabass board show CB-1` |
-| Start orchestrator (TUI) | `contrabass` |
-| Start headless | `contrabass --no-tui` |
-| Single poll cycle | `contrabass --dry-run` |
-| Verbose logging | `contrabass --log-level debug` |
-| Approve an issue | `contrabass board approve CB-1` |
-| Reject an issue | `contrabass board reject CB-1 --message "why"` |
-| Force retry now | `contrabass board retry CB-1` |
+| Initialize a project | `maestro init` |
+| Add an issue | `maestro board create "Fix bug"` |
+| List all issues | `maestro board list --all` |
+| Show issue details | `maestro board show CB-1` |
+| Start orchestrator (TUI) | `maestro` |
+| Start headless | `maestro --no-tui` |
+| Single poll cycle | `maestro --dry-run` |
+| Verbose logging | `maestro --log-level debug` |
+| Approve an issue | `maestro board approve CB-1` |
+| Reject an issue | `maestro board reject CB-1 --message "why"` |
+| Force retry now | `maestro board retry CB-1` |
 | Build from source | `make build` |
 | Run tests | `make test` |

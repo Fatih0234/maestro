@@ -1,13 +1,11 @@
-# Contrabass reference repo (used only for study)
-docs/references/contrabass/
-
-docs/
+# Maestro reference repo (used only for study)
+docs/references/maestro/
 
 # Local agent/runtime state
 .pi/
-.contrabass/projects/*/runs/
-.contrabass/projects/*/runs.old.*
+.maestro/projects/*/runs/
+.maestro/projects/*/runs.old.*
 
 # Go build outputs
-/contrabass
-/contrabass.exe
+/maestro
+/maestro.exe

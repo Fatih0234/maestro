@@ -1,16 +1,16 @@
-# Contrabass-PI
+# Maestro
 
-A minimal orchestrator for OpenCode coding agents. Poll a local board, create workspaces, dispatch agents through a plan-execute-verify pipeline, and monitor progress via TUI.
+A minimal orchestrator for AI coding agents. Poll a local board, create isolated workspaces, dispatch agents through a plan-execute-verify pipeline, and monitor progress via TUI.
 
 ## Quick Start
 
 ```bash
 # Inside any git project
-go install github.com/fatihkarahan/contrabass-pi/cmd/contrabass@latest
+go install github.com/fatihkarahan/maestro/cmd/maestro@latest
 
-contrabass init                          # set up WORKFLOW.md + board
-contrabass board create "Fix login bug"  # add an issue
-contrabass                               # start the orchestrator
+maestro init                          # set up WORKFLOW.md + board
+maestro board create "Fix login bug"  # add an issue
+maestro                              # start the orchestrator
 ```
 
 ## Pipeline
@@ -34,17 +34,17 @@ On success, the orchestrator marks the issue `in_review` and keeps the worktree 
 
 | Command | Description |
 |---------|-------------|
-| `contrabass init` | Set up the current directory as a contrabass project |
-| `contrabass` | Start the orchestrator (discovers `WORKFLOW.md`) |
-| `contrabass --no-tui` | Run headless |
-| `contrabass --dry-run` | One poll cycle, then exit |
-| `contrabass --log-level debug` | Verbose logging |
-| `contrabass board create "title"` | Add an issue |
-| `contrabass board list --all` | List all issues |
-| `contrabass board show CB-1` | Show issue details |
-| `contrabass board approve CB-1` | Mark done |
-| `contrabass board reject CB-1` | Return to todo |
-| `contrabass board retry CB-1` | Retry a failed issue |
+| `maestro init` | Set up the current directory as a maestro project |
+| `maestro` | Start the orchestrator (discovers `WORKFLOW.md`) |
+| `maestro --no-tui` | Run headless |
+| `maestro --dry-run` | One poll cycle, then exit |
+| `maestro --log-level debug` | Verbose logging |
+| `maestro board create "title"` | Add an issue |
+| `maestro board list --all` | List all issues |
+| `maestro board show CB-1` | Show issue details |
+| `maestro board approve CB-1` | Mark done |
+| `maestro board reject CB-1` | Return to todo |
+| `maestro board retry CB-1` | Retry a failed issue |
 
 ## Configuration
 
@@ -59,7 +59,7 @@ stall_timeout_ms: 120000
 
 tracker:
   type: internal
-  board_dir: .contrabass/projects/default/board
+  board_dir: .maestro/projects/default/board
   issue_prefix: CB
 
 agent:
@@ -76,7 +76,7 @@ opencode:
 
 workspace:
   base_dir: .
-  branch_prefix: contrabass/
+  branch_prefix: maestro/
 ---
 
 # Task
@@ -89,7 +89,7 @@ Implement the following issue: {{ issue.title }}
 ## Project Structure
 
 ```
-cmd/contrabass/          # CLI entry point
+cmd/maestro/             # CLI entry point
 internal/
   config/               # WORKFLOW.md parser
   tracker/              # Local board (file-based)
@@ -103,13 +103,12 @@ internal/
   util/                 # String utilities
 docs/
   context/              # Architecture + implementation guides
-  references/contrabass/ # Full Contrabass source (reference only, gitignored)
 ```
 
 ## Documentation
 
-- [`docs/context/what-contrabass-is.md`](./docs/context/what-contrabass-is.md) — high-level architecture
-- [`docs/context/minimal-contrabass.md`](./docs/context/minimal-contrabass.md) — implementation guide synced to the Go code
+- [`docs/context/what-maestro-is.md`](./docs/context/what-maestro-is.md) — high-level architecture
+- [`docs/context/minimal-maestro.md`](./docs/context/minimal-maestro.md) — implementation guide synced to the Go code
 
 ## License
 

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fatihkarahan/contrabass-pi/internal/orchestrator"
-	"github.com/fatihkarahan/contrabass-pi/internal/types"
+	"github.com/fatihkarahan/maestro/internal/orchestrator"
+	"github.com/fatihkarahan/maestro/internal/types"
 )
 
 func TestNewModel(t *testing.T) {
@@ -141,7 +141,7 @@ func TestModelApplyOrchestratorEvent_IssueReadyForReview(t *testing.T) {
 		Payload: map[string]interface{}{
 			"issue_id":       "CB-1",
 			"title":          "Fix login bug",
-			"branch":         "contrabass/CB-1",
+			"branch":         "maestro/CB-1",
 			"workspace_path": "/tmp/ws/CB-1",
 		},
 	}
@@ -155,8 +155,8 @@ func TestModelApplyOrchestratorEvent_IssueReadyForReview(t *testing.T) {
 	if !ok {
 		t.Fatal("review entry not created")
 	}
-	if review.Branch != "contrabass/CB-1" {
-		t.Fatalf("review branch = %q, want contrabass/CB-1", review.Branch)
+	if review.Branch != "maestro/CB-1" {
+		t.Fatalf("review branch = %q, want maestro/CB-1", review.Branch)
 	}
 	if review.WorkspacePath != "/tmp/ws/CB-1" {
 		t.Fatalf("review workspace path = %q, want /tmp/ws/CB-1", review.WorkspacePath)
@@ -168,7 +168,7 @@ func TestModelApplyOrchestratorEvent_IssueReadyForReview(t *testing.T) {
 
 func TestModelApplyOrchestratorEvent_IssueCompletedRemovesReviewEntry(t *testing.T) {
 	m := NewModel()
-	m.reviews["CB-1"] = ReviewRow{IssueID: "CB-1", Branch: "contrabass/CB-1", WorkspacePath: "/tmp/ws/CB-1"}
+	m.reviews["CB-1"] = ReviewRow{IssueID: "CB-1", Branch: "maestro/CB-1", WorkspacePath: "/tmp/ws/CB-1"}
 
 	event := types.OrchestratorEvent{
 		Type:      orchestrator.EventIssueCompleted,
@@ -290,7 +290,7 @@ func TestModelApplyOrchestratorEvent_ReviewRowIncludesStageProgress(t *testing.T
 		Payload: map[string]interface{}{
 			"issue_id":       "CB-1",
 			"title":          "Fix bug",
-			"branch":         "contrabass/CB-1",
+			"branch":         "maestro/CB-1",
 			"workspace_path": "/tmp/ws/CB-1",
 		},
 	}
