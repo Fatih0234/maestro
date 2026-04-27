@@ -403,6 +403,7 @@ func TestLocalTracker_IssueStateConversions(t *testing.T) {
 		{StateTodo, types.StateUnclaimed},
 		{StateInProgress, types.StateRunning},
 		{StateInReview, types.StateInReview},
+		{StateFailed, types.StateFailed},
 		{StateDone, types.StateReleased},
 	}
 
@@ -426,6 +427,7 @@ func TestLocalTracker_BoardStateConversions(t *testing.T) {
 		{types.StateRunning, StateInProgress},
 		{types.StateRetryQueued, StateRetryQueued},
 		{types.StateInReview, StateInReview},
+		{types.StateFailed, StateFailed},
 		{types.StateReleased, StateDone},
 	}
 
@@ -454,7 +456,7 @@ func TestLocalTracker_RetryQueuedState(t *testing.T) {
 
 	// Set as retry queued with a future time
 	futureTime := time.Now().Add(1 * time.Hour)
-	updated, err := tracker.SetRetryQueue(issue.ID, futureTime)
+	updated, err := tracker.SetRetryQueue(issue.ID, futureTime, 2, types.StageExecute)
 	if err != nil {
 		t.Fatalf("SetRetryQueue failed: %v", err)
 	}
@@ -474,7 +476,7 @@ func TestLocalTracker_RetryQueuedState(t *testing.T) {
 
 	// Set as retry queued with a past time
 	pastTime := time.Now().Add(-1 * time.Hour)
-	updated, err = tracker.SetRetryQueue(issue.ID, pastTime)
+	updated, err = tracker.SetRetryQueue(issue.ID, pastTime, 2, types.StageExecute)
 	if err != nil {
 		t.Fatalf("SetRetryQueue failed: %v", err)
 	}
@@ -524,7 +526,7 @@ func TestLocalTracker_SetRetryQueue(t *testing.T) {
 
 	// Set as retry queued
 	retryTime := time.Now().Add(30 * time.Second)
-	requeued, err := tracker.SetRetryQueue(issue.ID, retryTime)
+	requeued, err := tracker.SetRetryQueue(issue.ID, retryTime, 2, types.StageExecute)
 	if err != nil {
 		t.Fatalf("SetRetryQueue failed: %v", err)
 	}
@@ -533,9 +535,15 @@ func TestLocalTracker_SetRetryQueue(t *testing.T) {
 		t.Errorf("expected state retry_queued, got %v", requeued.State)
 	}
 
-	// Verify the retry_after time is preserved
+	// Verify the retry metadata is preserved.
 	if requeued.RetryAfter == nil {
 		t.Fatal("expected RetryAfter to be set")
+	}
+	if requeued.RetryAttempt != 2 {
+		t.Fatalf("RetryAttempt = %d, want 2", requeued.RetryAttempt)
+	}
+	if requeued.RetryStage != types.StageExecute {
+		t.Fatalf("RetryStage = %v, want execute", requeued.RetryStage)
 	}
 
 	// Time should be approximately correct (within 1 second)
@@ -572,7 +580,7 @@ func TestLocalTracker_UpdateIssueState_ClearsRetryAfter(t *testing.T) {
 	}
 
 	retryTime := time.Now().Add(1 * time.Hour)
-	_, err = tracker.SetRetryQueue(issue.ID, retryTime)
+	_, err = tracker.SetRetryQueue(issue.ID, retryTime, 2, types.StageExecute)
 	if err != nil {
 		t.Fatalf("SetRetryQueue failed: %v", err)
 	}
@@ -644,7 +652,7 @@ func TestLocalTracker_UpdateIssueState_InReviewClearsClaimAndRetryAfter(t *testi
 		t.Fatalf("ClaimIssue failed: %v", err)
 	}
 	retryAt := time.Now().Add(time.Hour)
-	if _, err := tracker.SetRetryQueue(issue.ID, retryAt); err != nil {
+	if _, err := tracker.SetRetryQueue(issue.ID, retryAt, 2, types.StageExecute); err != nil {
 		t.Fatalf("SetRetryQueue failed: %v", err)
 	}
 

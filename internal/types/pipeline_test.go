@@ -175,6 +175,7 @@ func TestIssueState_BoardState(t *testing.T) {
 		{StateRunning, "in_progress"},
 		{StateRetryQueued, "retry_queued"},
 		{StateInReview, "in_review"},
+		{StateFailed, "failed"},
 		{StateReleased, "done"},
 	}
 	for _, tt := range tests {
@@ -203,6 +204,7 @@ func TestIssueState_UnmarshalJSON(t *testing.T) {
 		{`"in_progress"`, StateRunning},
 		{`"retry_queued"`, StateRetryQueued},
 		{`"in_review"`, StateInReview},
+		{`"failed"`, StateFailed},
 		{`"done"`, StateReleased},
 		// Legacy integer support
 		{"1", StateClaimed},

@@ -21,6 +21,7 @@ const (
 	StateInProgress  = "in_progress"
 	StateInReview    = "in_review"
 	StateDone        = "done"
+	StateFailed      = "failed"
 	StateRetryQueued = "retry_queued" // Issue waiting for backoff retry
 )
 
@@ -42,17 +43,19 @@ type Manifest struct {
 
 // Issue represents a local board issue stored as JSON.
 type Issue struct {
-	ID          string     `json:"id"`
-	Identifier  string     `json:"identifier"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	State       string     `json:"state"`
-	Labels      []string   `json:"labels,omitempty"`
-	URL         string     `json:"url,omitempty"`
-	ClaimedBy   string     `json:"claimed_by,omitempty"`
-	RetryAfter  *time.Time `json:"retry_after,omitempty"` // When to retry (for retry_queued state)
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID           string     `json:"id"`
+	Identifier   string     `json:"identifier"`
+	Title        string     `json:"title"`
+	Description  string     `json:"description"`
+	State        string     `json:"state"`
+	Labels       []string   `json:"labels,omitempty"`
+	URL          string     `json:"url,omitempty"`
+	ClaimedBy    string     `json:"claimed_by,omitempty"`
+	RetryAfter   *time.Time `json:"retry_after,omitempty"` // When to retry (for retry_queued state)
+	RetryAttempt int        `json:"retry_attempt,omitempty"`
+	RetryStage   string     `json:"retry_stage,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 // Config holds configuration for the local tracker.
@@ -178,7 +181,7 @@ func (t *LocalTracker) FetchIssues() ([]types.Issue, error) {
 		}
 
 		// Skip terminal/handoff issues
-		if issue.State == StateDone || issue.State == StateInReview {
+		if issue.State == StateDone || issue.State == StateInReview || issue.State == StateFailed {
 			continue
 		}
 
@@ -219,7 +222,7 @@ func (t *LocalTracker) ClaimIssue(id string) (types.Issue, error) {
 	if err != nil {
 		return types.Issue{}, err
 	}
-	if issue.State == StateDone || issue.State == StateInReview {
+	if issue.State == StateDone || issue.State == StateInReview || issue.State == StateFailed {
 		return types.Issue{}, fmt.Errorf("issue %q cannot be claimed from state %q", id, issue.State)
 	}
 
@@ -300,6 +303,8 @@ func (t *LocalTracker) UpdateIssueState(id string, state types.IssueState) (type
 	// Clear retry_after when leaving retry_queued state
 	if state != types.StateRetryQueued {
 		issue.RetryAfter = nil
+		issue.RetryAttempt = 0
+		issue.RetryStage = ""
 	}
 	issue.UpdatedAt = time.Now().UTC()
 
@@ -385,16 +390,18 @@ func (t *LocalTracker) issuePath(id string) string {
 // toTypesIssue converts a local Issue to types.Issue.
 func (t *LocalTracker) toTypesIssue(issue Issue) types.Issue {
 	return types.Issue{
-		ID:          issue.ID,
-		Identifier:  issue.Identifier,
-		Title:       issue.Title,
-		Description: issue.Description,
-		State:       toIssueState(issue.State),
-		Labels:      slices.Clone(issue.Labels),
-		URL:         issue.URL,
-		RetryAfter:  issue.RetryAfter,
-		CreatedAt:   issue.CreatedAt,
-		UpdatedAt:   issue.UpdatedAt,
+		ID:           issue.ID,
+		Identifier:   issue.Identifier,
+		Title:        issue.Title,
+		Description:  issue.Description,
+		State:        toIssueState(issue.State),
+		Labels:       slices.Clone(issue.Labels),
+		URL:          issue.URL,
+		RetryAfter:   issue.RetryAfter,
+		RetryAttempt: issue.RetryAttempt,
+		RetryStage:   types.Stage(issue.RetryStage),
+		CreatedAt:    issue.CreatedAt,
+		UpdatedAt:    issue.UpdatedAt,
 	}
 }
 
@@ -441,7 +448,7 @@ func (t *LocalTracker) ListAllIssues() ([]types.Issue, error) {
 
 // SetRetryQueue marks an issue as retry_queued with a retry_after timestamp.
 // This is the preferred way to queue an issue for retry instead of using UpdateIssueState.
-func (t *LocalTracker) SetRetryQueue(id string, retryAt time.Time) (types.Issue, error) {
+func (t *LocalTracker) SetRetryQueue(id string, retryAt time.Time, attempt int, stage types.Stage) (types.Issue, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -456,6 +463,8 @@ func (t *LocalTracker) SetRetryQueue(id string, retryAt time.Time) (types.Issue,
 
 	issue.State = StateRetryQueued
 	issue.RetryAfter = &retryAt
+	issue.RetryAttempt = attempt
+	issue.RetryStage = stage.String()
 	issue.ClaimedBy = ""
 	issue.UpdatedAt = time.Now().UTC()
 
@@ -475,6 +484,8 @@ func toBoardState(state types.IssueState) string {
 		return StateRetryQueued // Preserve retry_queued state
 	case types.StateInReview:
 		return StateInReview
+	case types.StateFailed:
+		return StateFailed
 	case types.StateReleased:
 		return StateDone
 	default:
@@ -491,6 +502,8 @@ func toIssueState(state string) types.IssueState {
 		return types.StateRetryQueued
 	case StateInReview:
 		return types.StateInReview
+	case StateFailed:
+		return types.StateFailed
 	case StateDone:
 		return types.StateReleased
 	default:

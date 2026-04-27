@@ -7,9 +7,12 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,9 +27,16 @@ import (
 // Sentinel errors for the orchestrator to reliably classify failures without
 // matching against error messages.
 var (
-	ErrWorkspace = errors.New("workspace creation")
-	ErrAgent     = errors.New("agent start")
+	ErrWorkspace          = errors.New("workspace creation")
+	ErrAgent              = errors.New("agent start")
+	ErrVerificationFailed = errors.New("verification failed")
+	ErrVerificationResult = errors.New("verification result")
 )
+
+type verificationResult struct {
+	Passed  bool   `json:"passed"`
+	Summary string `json:"summary"`
+}
 
 // Event type strings emitted by the runner. These mirror the orchestrator
 // constants so consumers can treat them interchangeably.
@@ -193,7 +203,35 @@ monitor:
 			}
 		case err := <-proc.Done:
 			runErr = err
+			draining := true
+			for draining {
+				select {
+				case event, ok := <-proc.Events:
+					if !ok {
+						draining = false
+						continue
+					}
+					if ti, to := agent.ExtractTokens(event); ti > 0 || to > 0 {
+						tokensIn += ti
+						tokensOut += to
+					}
+					if event.Type == agent.EventTypeMessageUpdated {
+						responseText.WriteString(agent.ExtractTextContent(event))
+					}
+					if stageRecorder != nil {
+						_ = stageRecorder.AppendEvent(types.OrchestratorEvent{Type: event.Type, IssueID: issueID, Timestamp: time.Now().UTC(), Payload: event.Payload})
+					}
+				default:
+					draining = false
+				}
+			}
 			break monitor
+		}
+	}
+
+	if runErr == nil && stage == types.StageVerify {
+		if verifyErr := parseVerificationResult(responseText.String()); verifyErr != nil {
+			runErr = verifyErr
 		}
 	}
 
@@ -291,7 +329,12 @@ Verify that:
 - Tests pass (if applicable)
 - No unintended side effects were introduced
 
-Provide a pass/fail assessment with evidence.`, base)
+Provide a pass/fail assessment with evidence.
+
+End your response with exactly one machine-readable JSON object on its own line:
+{"passed": true, "summary": "evidence for the decision"}
+
+Set "passed" to false if requirements are not met or tests fail.`, base)
 
 	default:
 		return base
@@ -315,11 +358,65 @@ func (r *Runner) classifyFailure(err error, stage types.Stage) types.StageFailur
 	}
 }
 
+func parseVerificationResult(text string) error {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return fmt.Errorf("%w: missing JSON result", ErrVerificationResult)
+	}
+
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
+			continue
+		}
+		var result verificationResult
+		if err := json.Unmarshal([]byte(line), &result); err != nil {
+			return fmt.Errorf("%w: invalid JSON result: %w", ErrVerificationResult, err)
+		}
+		if !result.Passed {
+			if strings.TrimSpace(result.Summary) == "" {
+				return fmt.Errorf("%w: verification reported passed=false", ErrVerificationFailed)
+			}
+			return fmt.Errorf("%w: %s", ErrVerificationFailed, result.Summary)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("%w: missing JSON result", ErrVerificationResult)
+}
+
 func (r *Runner) captureDiff(ctx context.Context, dir string) string {
 	if strings.TrimSpace(dir) == "" {
 		return ""
 	}
-	return r.gitOutput(ctx, dir, "diff", "HEAD")
+	tracked := r.gitOutput(ctx, dir, "diff", "HEAD")
+	untracked := r.captureUntrackedDiff(ctx, dir)
+	return strings.TrimSpace(tracked + "\n" + untracked)
+}
+
+func (r *Runner) captureUntrackedDiff(ctx context.Context, dir string) string {
+	out := r.gitOutput(ctx, dir, "ls-files", "--others", "--exclude-standard")
+	if strings.TrimSpace(out) == "" || strings.HasPrefix(out, "error:") {
+		return ""
+	}
+	var diff strings.Builder
+	for _, rel := range strings.Split(out, "\n") {
+		rel = strings.TrimSpace(rel)
+		if rel == "" {
+			continue
+		}
+		path := filepath.Join(dir, rel)
+		cmd := exec.CommandContext(ctx, "git", "diff", "--no-index", "--", os.DevNull, path)
+		cmd.Dir = dir
+		data, _ := cmd.CombinedOutput()
+		if len(data) > 0 {
+			diff.Write(data)
+			if !strings.HasSuffix(diff.String(), "\n") {
+				diff.WriteByte('\n')
+			}
+		}
+	}
+	return diff.String()
 }
 
 func (r *Runner) captureGitState(baseDir string) (string, string) {
@@ -356,5 +453,3 @@ func (r *Runner) gitOutput(ctx context.Context, dir string, args ...string) stri
 	}
 	return text
 }
-
-

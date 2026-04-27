@@ -99,7 +99,7 @@ func (f *FakeRunner) Start(ctx context.Context, issue types.Issue, workspace, pr
 	procCtx, cancel := context.WithCancel(ctx)
 	f.cancels[proc.SessionID] = cancel
 
-	go f.runScript(procCtx, proc.SessionID, script, events, done)
+	go f.runScript(procCtx, proc.SessionID, stage, script, events, done)
 
 	return &types.AgentProcess{
 		PID:       proc.PID,
@@ -109,7 +109,7 @@ func (f *FakeRunner) Start(ctx context.Context, issue types.Issue, workspace, pr
 	}, nil
 }
 
-func (f *FakeRunner) runScript(ctx context.Context, sessionID string, script *StageScript, events chan<- types.AgentEvent, done chan<- error) {
+func (f *FakeRunner) runScript(ctx context.Context, sessionID string, stage types.Stage, script *StageScript, events chan<- types.AgentEvent, done chan<- error) {
 	defer func() {
 		f.mu.Lock()
 		delete(f.cancels, sessionID)
@@ -143,6 +143,16 @@ func (f *FakeRunner) runScript(ctx context.Context, sessionID string, script *St
 	var err error
 	if script != nil {
 		err = script.DoneErr
+	}
+	if stage == types.StageVerify && err == nil {
+		select {
+		case events <- types.AgentEvent{Type: EventTypeMessageUpdated, Payload: map[string]interface{}{"text": `{"passed": true, "summary": "ok"}`}}:
+		case <-ctx.Done():
+			done <- ctx.Err()
+			close(done)
+			close(events)
+			return
+		}
 	}
 	done <- err
 	close(done)

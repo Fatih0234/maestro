@@ -45,7 +45,7 @@ func boardCreate(args []string) error {
 	fs := flag.NewFlagSet("board create", flag.ExitOnError)
 	description := fs.String("description", "", "issue description")
 	labelsStr := fs.String("labels", "", "comma-separated labels")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(flagsBeforePositionals(args)); err != nil {
 		return err
 	}
 
@@ -238,7 +238,7 @@ func boardShow(args []string) error {
 func boardApprove(args []string) error {
 	fs := flag.NewFlagSet("board approve", flag.ExitOnError)
 	message := fs.String("message", "", "approval note")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(flagsBeforePositionals(args)); err != nil {
 		return err
 	}
 	remaining := fs.Args()
@@ -305,7 +305,7 @@ func boardApprove(args []string) error {
 func boardReject(args []string) error {
 	fs := flag.NewFlagSet("board reject", flag.ExitOnError)
 	message := fs.String("message", "", "rejection note")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(flagsBeforePositionals(args)); err != nil {
 		return err
 	}
 	remaining := fs.Args()
@@ -369,6 +369,24 @@ func boardReject(args []string) error {
 	fmt.Printf("Rejected %s\n", issueID)
 	fmt.Printf("  Workspace: %s\n", summary.WorkspacePath)
 	return nil
+}
+
+func flagsBeforePositionals(args []string) []string {
+	flags := make([]string, 0, len(args))
+	positionals := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			flags = append(flags, arg)
+			if !strings.Contains(arg, "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				flags = append(flags, args[i+1])
+				i++
+			}
+			continue
+		}
+		positionals = append(positionals, arg)
+	}
+	return append(flags, positionals...)
 }
 
 // boardRetry moves a retry_queued issue back to todo.

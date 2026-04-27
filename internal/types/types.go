@@ -13,6 +13,7 @@ const (
 	StateRunning
 	StateRetryQueued
 	StateInReview
+	StateFailed
 	StateReleased
 )
 
@@ -28,6 +29,8 @@ func (s IssueState) String() string {
 		return "retry_queued"
 	case StateInReview:
 		return "in_review"
+	case StateFailed:
+		return "failed"
 	case StateReleased:
 		return "released"
 	default:
@@ -81,17 +84,20 @@ func (p RunPhase) String() string {
 // Issue represents a task to be processed by an agent.
 
 type Issue struct {
-	ID          string     `json:"id"`                    // Unique identifier (e.g., "CB-1")
-	Identifier  string     `json:"identifier,omitempty"`  // Display identifier (e.g., "CB-1")
-	Title       string     `json:"title"`                 // Brief description
-	Description string     `json:"description"`           // Full details
-	State       IssueState `json:"state"`                 // Current state
-	Labels      []string   `json:"labels,omitempty"`      // Tags for categorization
-	URL         string     `json:"url,omitempty"`         // Link to the issue (empty for local tracker)
-	RetryAfter  *time.Time `json:"retry_after,omitempty"` // When to retry (for retry_queued state)
-	CreatedAt   time.Time  `json:"created_at"`            // When issue was created
-	UpdatedAt   time.Time  `json:"updated_at"`            // Last modification
+	ID           string     `json:"id"`                    // Unique identifier (e.g., "CB-1")
+	Identifier   string     `json:"identifier,omitempty"`  // Display identifier (e.g., "CB-1")
+	Title        string     `json:"title"`                 // Brief description
+	Description  string     `json:"description"`           // Full details
+	State        IssueState `json:"state"`                 // Current state
+	Labels       []string   `json:"labels,omitempty"`      // Tags for categorization
+	URL          string     `json:"url,omitempty"`         // Link to the issue (empty for local tracker)
+	RetryAfter   *time.Time `json:"retry_after,omitempty"` // When to retry (for retry_queued state)
+	RetryAttempt int        `json:"retry_attempt,omitempty"`
+	RetryStage   Stage      `json:"retry_stage,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"` // When issue was created
+	UpdatedAt    time.Time  `json:"updated_at"` // Last modification
 }
+
 // BackoffEntry represents a queued retry for a failed issue.
 type BackoffEntry struct {
 	IssueID string    // Which issue to retry
@@ -145,7 +151,7 @@ type IssueTracker interface {
 	UpdateIssueState(id string, state IssueState) (Issue, error)
 	// SetRetryQueue marks an issue as waiting for retry. Not all trackers
 	// may support this; those that don't should return an error.
-	SetRetryQueue(id string, retryAt time.Time) (Issue, error)
+	SetRetryQueue(id string, retryAt time.Time, attempt int, stage Stage) (Issue, error)
 	// ListAllIssues returns all known issues regardless of state.
 	// For remote trackers this may be limited to open/non-archived issues.
 	ListAllIssues() ([]Issue, error)

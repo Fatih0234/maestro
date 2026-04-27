@@ -21,6 +21,7 @@ type mockAgentRunner struct {
 	shouldFail bool
 	doneErr    error
 	delay      time.Duration
+	response   string
 }
 
 func (m *mockAgentRunner) Start(ctx context.Context, issue types.Issue, workspace, prompt string) (*types.AgentProcess, error) {
@@ -32,6 +33,9 @@ func (m *mockAgentRunner) Start(ctx context.Context, issue types.Issue, workspac
 	go func() {
 		if m.delay > 0 {
 			time.Sleep(m.delay)
+		}
+		if m.response != "" {
+			events <- types.AgentEvent{Type: "message.part.updated", Payload: map[string]interface{}{"text": m.response}}
 		}
 		close(events)
 		done <- m.doneErr
@@ -46,7 +50,7 @@ func (m *mockAgentRunner) Start(ctx context.Context, issue types.Issue, workspac
 }
 
 func (m *mockAgentRunner) Stop(proc *types.AgentProcess) error { return nil }
-func (m *mockAgentRunner) Close() error                         { return nil }
+func (m *mockAgentRunner) Close() error                        { return nil }
 
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
@@ -302,6 +306,7 @@ func TestRunner_Run_AgentStartFailureWritesStageResult(t *testing.T) {
 // before completing, leaving uncommitted changes.
 type dirtyWorkspaceRunner struct {
 	workspace string
+	response  string
 }
 
 func (m *dirtyWorkspaceRunner) Start(ctx context.Context, issue types.Issue, workspace, prompt string) (*types.AgentProcess, error) {
@@ -311,6 +316,9 @@ func (m *dirtyWorkspaceRunner) Start(ctx context.Context, issue types.Issue, wor
 	go func() {
 		// Write a file to dirty the workspace
 		_ = os.WriteFile(filepath.Join(workspace, "dirty.txt"), []byte("dirty"), 0o644)
+		if m.response != "" {
+			events <- types.AgentEvent{Type: "message.part.updated", Payload: map[string]interface{}{"text": m.response}}
+		}
 		close(events)
 		done <- nil
 		close(done)
@@ -324,7 +332,7 @@ func (m *dirtyWorkspaceRunner) Start(ctx context.Context, issue types.Issue, wor
 }
 
 func (m *dirtyWorkspaceRunner) Stop(proc *types.AgentProcess) error { return nil }
-func (m *dirtyWorkspaceRunner) Close() error                         { return nil }
+func (m *dirtyWorkspaceRunner) Close() error                        { return nil }
 
 func TestRunner_Run_NoAutoCommitInPlanStage(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -402,7 +410,7 @@ func TestRunner_Run_NoAutoCommitInVerifyStage(t *testing.T) {
 			Workspace: config.WorkspaceConfig{BranchPrefix: "test/"},
 		},
 		Workspace:   ws,
-		AgentRunner: &dirtyWorkspaceRunner{},
+		AgentRunner: &dirtyWorkspaceRunner{response: `{"passed": true, "summary": "ok"}`},
 	}
 
 	issue := types.Issue{ID: "CB-1", Title: "Test Issue", Description: "Do something"}
@@ -417,5 +425,31 @@ func TestRunner_Run_NoAutoCommitInVerifyStage(t *testing.T) {
 	gitLog := runner.gitOutput(context.Background(), result.WorkspacePath, "log", "--oneline")
 	if strings.Contains(gitLog, "feat(CB-1)") {
 		t.Error("verify stage should not auto-commit changes")
+	}
+}
+
+func TestRunner_Run_VerifyFailedResultBlocksSuccess(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
+	ws := workspace.New(workspace.Config{BaseDir: tmpDir, BranchPrefix: "test/"})
+	runner := &Runner{
+		Config: &config.Config{
+			Content:   "Fix: {{ issue.title }}",
+			Workspace: config.WorkspaceConfig{BranchPrefix: "test/"},
+		},
+		Workspace:   ws,
+		AgentRunner: &mockAgentRunner{response: `{"passed": false, "summary": "tests failed"}`},
+	}
+
+	issue := types.Issue{ID: "CB-1", Title: "Test Issue", Description: "Do something"}
+	result, err := runner.Run(context.Background(), issue, 1, types.StageVerify, func(types.OrchestratorEvent) {})
+	if err != nil {
+		t.Fatalf("Run returned transport error: %v", err)
+	}
+	if result.Success {
+		t.Fatal("verify stage should fail when the verification result reports passed=false")
+	}
+	if !errors.Is(result.Error, ErrVerificationFailed) {
+		t.Fatalf("result error = %v, want ErrVerificationFailed", result.Error)
 	}
 }

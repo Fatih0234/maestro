@@ -531,6 +531,49 @@ func TestOrchestrator_HandleAgentDone_Success(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_DispatchReadyRestoresPersistedRetryStageAndAttempt(t *testing.T) {
+	retryAt := time.Now().Add(-time.Minute)
+	issue := types.Issue{
+		ID:           "CB-1",
+		Title:        "Retry execute",
+		State:        types.StateRetryQueued,
+		RetryAfter:   &retryAt,
+		RetryAttempt: 2,
+		RetryStage:   types.StageExecute,
+		CreatedAt:    time.Now(),
+	}
+	tracker := NewMockTracker([]types.Issue{issue})
+	runner := NewMockAgentRunner()
+	orch := New(testConfig(), tracker, NewMockWorkspace(), runner)
+	events := NewEventCollector(orch.Events)
+
+	orch.dispatchReady()
+	time.Sleep(100 * time.Millisecond)
+
+	if runner.StartCallCount() != 2 {
+		t.Fatalf("StartCallCount = %d, want 2 (execute + verify)", runner.StartCallCount())
+	}
+	startedExecute := false
+	startedPlan := false
+	for _, event := range events.GetByIssue("CB-1") {
+		if event.Type != EventStageStarted {
+			continue
+		}
+		payload, ok := event.Payload.(StagePayload)
+		if !ok {
+			continue
+		}
+		startedExecute = startedExecute || payload.Stage == types.StageExecute
+		startedPlan = startedPlan || payload.Stage == types.StagePlan
+	}
+	if !startedExecute {
+		t.Fatal("expected execute stage to start")
+	}
+	if startedPlan {
+		t.Fatal("did not expect plan stage to restart for persisted retry")
+	}
+}
+
 func TestOrchestrator_HandleAgentDone_HandoffStateUpdateFailureQueuesRetry(t *testing.T) {
 	cfg := testConfig()
 	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
@@ -745,6 +788,30 @@ func TestOrchestrator_MultiStage_VerifyFailureBlocksReview(t *testing.T) {
 	// 3 start calls (plan + execute succeeded, verify failed)
 	if got := runner.StartCallCount(); got != 3 {
 		t.Errorf("StartCalls = %d, want 3", got)
+	}
+}
+
+func TestOrchestrator_VerifyCleanExitFailedResultQueuesRetry(t *testing.T) {
+	cfg := testConfig()
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Issue")})
+	runner := NewMockAgentRunner()
+	runner.EventsToSend = []types.AgentEvent{{Type: "message.part.updated", Payload: map[string]interface{}{"text": `{"passed": false, "summary": "tests failed"}`}}}
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	events := NewEventCollector(orch.Events)
+
+	orch.poll()
+	time.Sleep(200 * time.Millisecond)
+
+	if events.Has(EventIssueReadyForReview) {
+		t.Fatal("did not expect IssueReadyForReview when verify reports passed=false")
+	}
+	if !events.Has(EventIssueRetrying) {
+		t.Fatal("expected IssueRetrying when verify reports passed=false")
+	}
+	if tracker.UpdateState["CB-1"] == types.StateInReview {
+		t.Fatal("issue should not transition to in_review")
 	}
 }
 

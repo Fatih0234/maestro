@@ -138,6 +138,33 @@ func TestBoardList_FilterByState(t *testing.T) {
 	}
 }
 
+func TestBoardCreate_AcceptsFlagsAfterTitle(t *testing.T) {
+	tmpDir, tr, recorder := setupTestBoard(t)
+	defer recorder.Close()
+
+	oldConfigPath := *configPath
+	*configPath = filepath.Join(tmpDir, "WORKFLOW.md")
+	defer func() { *configPath = oldConfigPath }()
+
+	if err := boardCreate([]string{"Flag Order", "--description", "Details", "--labels", "bug,urgent"}); err != nil {
+		t.Fatalf("boardCreate: %v", err)
+	}
+
+	issues, err := tr.ListAllIssues()
+	if err != nil {
+		t.Fatalf("ListAllIssues: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issue count = %d, want 1", len(issues))
+	}
+	if issues[0].Description != "Details" {
+		t.Fatalf("description = %q, want Details", issues[0].Description)
+	}
+	if got := strings.Join(issues[0].Labels, ","); got != "bug,urgent" {
+		t.Fatalf("labels = %q, want bug,urgent", got)
+	}
+}
+
 func TestBoardShow_DisplaysIssue(t *testing.T) {
 	tmpDir, tr, recorder := setupTestBoard(t)
 	defer recorder.Close()
@@ -192,7 +219,7 @@ func TestBoardApprove_UpdatesStateAndWritesDecision(t *testing.T) {
 	*configPath = filepath.Join(tmpDir, "WORKFLOW.md")
 	defer func() { *configPath = oldConfigPath }()
 
-	err = boardApprove([]string{"--message", "LGTM", issue.ID})
+	err = boardApprove([]string{issue.ID, "--message", "LGTM"})
 	if err != nil {
 		t.Fatalf("boardApprove: %v", err)
 	}
@@ -263,7 +290,7 @@ func TestBoardReject_UpdatesStateAndWritesDecision(t *testing.T) {
 	*configPath = filepath.Join(tmpDir, "WORKFLOW.md")
 	defer func() { *configPath = oldConfigPath }()
 
-	err = boardReject([]string{"--message", "Needs tests", issue.ID})
+	err = boardReject([]string{issue.ID, "--message", "Needs tests"})
 	if err != nil {
 		t.Fatalf("boardReject: %v", err)
 	}
@@ -297,7 +324,7 @@ func TestBoardRetry_MovesRetryQueuedToTodo(t *testing.T) {
 		t.Fatalf("UpdateIssueState: %v", err)
 	}
 	// Set retry_after in the past so it's eligible.
-	tr.SetRetryQueue(issue.ID, time.Now().Add(-time.Hour))
+	tr.SetRetryQueue(issue.ID, time.Now().Add(-time.Hour), 2, types.StageExecute)
 
 	oldConfigPath := *configPath
 	*configPath = filepath.Join(tmpDir, "WORKFLOW.md")
@@ -388,7 +415,7 @@ func TestBoardReject_NotesPreserved(t *testing.T) {
 	*configPath = filepath.Join(tmpDir, "WORKFLOW.md")
 	defer func() { *configPath = oldConfigPath }()
 
-	err = boardReject([]string{"--message", "Add more tests", issue.ID})
+	err = boardReject([]string{issue.ID, "--message", "Add more tests"})
 	if err != nil {
 		t.Fatalf("boardReject: %v", err)
 	}

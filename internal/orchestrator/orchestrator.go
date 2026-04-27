@@ -198,7 +198,7 @@ func (o *Orchestrator) handleTimeout(run RunState, elapsed time.Duration) {
 	// Enqueue backoff
 	attempt := run.Attempt + 1
 	entry := o.Backoff.Enqueue(issueID, attempt, run.Stage, fmt.Sprintf("timeout after %v", elapsed))
-	o.persistRetryQueue(issueID, entry.RetryAt)
+	o.persistRetryQueue(entry)
 
 	o.finalizeAttempt(issueID, run.Attempt, "timed_out", &entry.RetryAt, fmt.Errorf("timeout after %v", elapsed))
 
@@ -253,7 +253,7 @@ func (o *Orchestrator) handleStall(run RunState, lastEventAge time.Duration) {
 	// Enqueue backoff
 	attempt := run.Attempt + 1
 	entry := o.Backoff.Enqueue(issueID, attempt, run.Stage, fmt.Sprintf("stall: no event for %v", lastEventAge))
-	o.persistRetryQueue(issueID, entry.RetryAt)
+	o.persistRetryQueue(entry)
 
 	o.finalizeAttempt(issueID, run.Attempt, "stalled", &entry.RetryAt, fmt.Errorf("stall: no event for %v", lastEventAge))
 
@@ -385,8 +385,18 @@ func (o *Orchestrator) dispatchReady() {
 		// Emit claimed
 		o.emit(EventIssueClaimed, issue.ID, map[string]interface{}{"issue": claimed})
 
-		// Start the run from the plan stage
-		o.startRun(claimed, 1, types.StagePlan)
+		attempt := 1
+		startStage := types.StagePlan
+		if issue.State == types.StateRetryQueued {
+			if issue.RetryAttempt > 0 {
+				attempt = issue.RetryAttempt
+			}
+			if issue.RetryStage.Valid() {
+				startStage = issue.RetryStage
+			}
+		}
+
+		o.startRun(claimed, attempt, startStage)
 	}
 }
 
@@ -535,7 +545,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 
 				nextAttempt := attempt + 1
 				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, fmt.Sprintf("context cancelled before %s: %v", stage, err))
-				o.persistRetryQueue(issueID, entry.RetryAt)
+				o.persistRetryQueue(entry)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
 				o.emit(EventStageFailed, issueID, StagePayload{
@@ -609,7 +619,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 
 				nextAttempt := attempt + 1
 				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, fmt.Sprintf("stage %s failed: %v", stage, err))
-				o.persistRetryQueue(issueID, entry.RetryAt)
+				o.persistRetryQueue(entry)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
 				o.emit(EventStageFailed, issueID, StagePayload{
@@ -662,7 +672,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				failureKind := o.classifyStageFailure(result.Error, stage)
 
 				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, errMsg)
-				o.persistRetryQueue(issueID, entry.RetryAt)
+				o.persistRetryQueue(entry)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, result.Error)
 
 				o.emit(EventStageFailed, issueID, StagePayload{
@@ -724,7 +734,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 			o.State.Remove(issueID)
 
 			entry := o.Backoff.Enqueue(issueID, nextAttempt, types.StagePlan, fmt.Sprintf("review handoff failed: %v", err))
-			o.persistRetryQueue(issueID, entry.RetryAt)
+			o.persistRetryQueue(entry)
 			o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
 			o.emit(EventAgentFinished, issueID, AgentResultPayload{
@@ -774,13 +784,16 @@ func (o *Orchestrator) removeRunning(issueID string) {
 // for dispatch. If the tracker fails to persist (network error, disk full,
 // etc.), the retry still happens at the scheduled time but won't be visible
 // to external systems (e.g., no GitHub label/comment).
-func (o *Orchestrator) persistRetryQueue(issueID string, retryAt time.Time) {
-	if _, err := o.Tracker.SetRetryQueue(issueID, retryAt); err != nil {
+func (o *Orchestrator) persistRetryQueue(entry *types.BackoffEntry) {
+	if entry == nil {
+		return
+	}
+	if _, err := o.Tracker.SetRetryQueue(entry.IssueID, entry.RetryAt, entry.Attempt, entry.Stage); err != nil {
 		// Best-effort: log via event channel if space, otherwise swallow.
 		select {
 		case o.Events <- types.OrchestratorEvent{
 			Type:      "retry_queue_persist_failed",
-			IssueID:   issueID,
+			IssueID:   entry.IssueID,
 			Timestamp: time.Now().UTC(),
 			Payload:   map[string]string{"error": err.Error()},
 		}:

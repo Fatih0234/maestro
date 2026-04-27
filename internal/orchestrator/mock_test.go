@@ -72,7 +72,9 @@ func (m *MockAgentRunner) Start(ctx context.Context, issue types.Issue, workspac
 
 	// Capture error to send — allow per-stage overrides.
 	doneErr := m.DoneError
+	stage := types.StagePlan
 	if stageCtx, ok := types.StageFromContext(ctx); ok {
+		stage = stageCtx.Stage
 		if perStageErr, exists := m.PerStageDoneError[stageCtx.Stage]; exists {
 			doneErr = perStageErr
 		}
@@ -87,6 +89,9 @@ func (m *MockAgentRunner) Start(ctx context.Context, issue types.Issue, workspac
 			case <-ctx.Done():
 				return
 			}
+		}
+		if stage == types.StageVerify && doneErr == nil {
+			events <- types.AgentEvent{Type: "message.part.updated", Payload: map[string]interface{}{"text": `{"passed": true, "summary": "ok"}`}}
 		}
 		// Send done with configured error (nil for success, error for failure)
 		// before closing events so the pipeline monitor always sees the error.
@@ -159,11 +164,11 @@ type MockTracker struct {
 	ForcedFetch []types.Issue
 
 	// Call tracking
-	ClaimCalls          int
-	ReleaseCalls        int
-	UpdateCalls         int
-	SetRetryQueueCalls  int
-	UpdateState         map[string]types.IssueState
+	ClaimCalls         int
+	ReleaseCalls       int
+	UpdateCalls        int
+	SetRetryQueueCalls int
+	UpdateState        map[string]types.IssueState
 }
 
 var _ types.IssueTracker = (*MockTracker)(nil)
@@ -289,7 +294,7 @@ func (m *MockTracker) UpdateIssueState(id string, state types.IssueState) (types
 }
 
 // SetRetryQueue implements IssueTracker.SetRetryQueue
-func (m *MockTracker) SetRetryQueue(id string, retryAt time.Time) (types.Issue, error) {
+func (m *MockTracker) SetRetryQueue(id string, retryAt time.Time, attempt int, stage types.Stage) (types.Issue, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -302,6 +307,8 @@ func (m *MockTracker) SetRetryQueue(id string, retryAt time.Time) (types.Issue, 
 
 	issue.State = types.StateRetryQueued
 	issue.RetryAfter = &retryAt
+	issue.RetryAttempt = attempt
+	issue.RetryStage = stage
 	m.issues[id] = issue
 
 	return issue, nil

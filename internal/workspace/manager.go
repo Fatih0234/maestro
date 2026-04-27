@@ -109,11 +109,7 @@ func (m *Manager) Create(ctx context.Context, issue types.Issue) (string, error)
 			m.mu.Unlock()
 			return workspacePath, nil
 		}
-		// Invalid / prunable worktree — remove directory and prune git's registry.
-		if err := os.RemoveAll(workspacePath); err != nil {
-			return "", fmt.Errorf("remove invalid worktree directory %s: %w", workspacePath, err)
-		}
-		_, _ = m.runGit(ctx, "worktree", "prune")
+		return "", fmt.Errorf("workspace path %s already exists but is not a valid git worktree; move or remove it before retrying", workspacePath)
 	}
 
 	// Create parent directory

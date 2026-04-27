@@ -83,6 +83,29 @@ func TestManager_Path(t *testing.T) {
 	}
 }
 
+func TestManager_CreateRefusesPreExistingNonWorktreeDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepo(t, tmpDir)
+
+	manager := New(Config{BaseDir: tmpDir, WorktreeDir: "workspaces", BranchPrefix: "test/"})
+	issue := types.Issue{ID: "CB-1", Title: "Test"}
+	workspacePath := manager.Path(issue.ID)
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	sentinel := filepath.Join(workspacePath, "sentinel.txt")
+	if err := os.WriteFile(sentinel, []byte("do not delete"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := manager.Create(context.Background(), issue); err == nil {
+		t.Fatal("expected Create to fail for pre-existing non-worktree directory")
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("sentinel should be preserved, stat failed: %v", err)
+	}
+}
+
 func TestManager_Exists_NotExists(t *testing.T) {
 	tmpDir := t.TempDir()
 	initGitRepo(t, tmpDir)

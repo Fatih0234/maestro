@@ -250,6 +250,8 @@ func (s IssueState) BoardState() string {
 		return "retry_queued"
 	case StateInReview:
 		return "in_review"
+	case StateFailed:
+		return "failed"
 	case StateReleased:
 		return "done"
 	default:
@@ -299,6 +301,8 @@ func parseIssueStateLabel(label string) (IssueState, error) {
 		return StateRetryQueued, nil
 	case "in_review":
 		return StateInReview, nil
+	case "failed":
+		return StateFailed, nil
 	case "done", "released":
 		return StateReleased, nil
 	default:
