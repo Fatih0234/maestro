@@ -21,6 +21,13 @@ import (
 	"github.com/fatihkarahan/contrabass-pi/internal/workspace"
 )
 
+// Sentinel errors for the orchestrator to reliably classify failures without
+// matching against error messages.
+var (
+	ErrWorkspace = errors.New("workspace creation")
+	ErrAgent     = errors.New("agent start")
+)
+
 // Event type strings emitted by the runner. These mirror the orchestrator
 // constants so consumers can treat them interchangeably.
 const (
@@ -69,7 +76,7 @@ func (r *Runner) Run(ctx context.Context, issue types.Issue, attempt int, stage 
 	// 1. Create workspace (idempotent — reused across stages)
 	wsPath, err := r.Workspace.Create(ctx, issue)
 	if err != nil {
-		return nil, fmt.Errorf("workspace creation: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrWorkspace, err)
 	}
 	if wsPath != "" {
 		workspacePath = wsPath
@@ -109,6 +116,7 @@ func (r *Runner) Run(ctx context.Context, issue types.Issue, attempt int, stage 
 	// 4. Start agent
 	proc, err := r.AgentRunner.Start(ctx, issue, workspacePath, prompt)
 	if err != nil {
+		err = fmt.Errorf("%w: %w", ErrAgent, err)
 		if stageRecorder != nil {
 			result := types.StageResult{
 				Stage:       stage,
@@ -121,7 +129,7 @@ func (r *Runner) Run(ctx context.Context, issue types.Issue, attempt int, stage 
 			}
 			_ = stageRecorder.Finish(result, "", "")
 		}
-		return nil, fmt.Errorf("agent start: %w", err)
+		return nil, err
 	}
 
 	emit(types.OrchestratorEvent{
@@ -242,20 +250,7 @@ monitor:
 }
 
 func (r *Runner) buildPrompt(issue types.Issue) string {
-	template := r.Config.Content
-	if template == "" {
-		return issue.Description
-	}
-	template = strings.ReplaceAll(template, "{{ issue.id }}", issue.ID)
-	template = strings.ReplaceAll(template, "{{ issue.identifier }}", issue.Identifier)
-	template = strings.ReplaceAll(template, "{{ issue.title }}", issue.Title)
-	template = strings.ReplaceAll(template, "{{ issue.description }}", issue.Description)
-	labels := ""
-	if len(issue.Labels) > 0 {
-		labels = strings.Join(issue.Labels, ", ")
-	}
-	template = strings.ReplaceAll(template, "{{ issue.labels }}", labels)
-	return strings.TrimSpace(template)
+	return util.ExpandPrompt(r.Config.Content, issue)
 }
 
 // buildStagePrompt wraps the base prompt with stage-specific intent so the

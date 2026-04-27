@@ -1,7 +1,11 @@
 // Package util provides shared utility functions used across the project.
 package util
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/fatihkarahan/contrabass-pi/internal/types"
+)
 
 // SanitizeBranchName sanitizes an issue ID for use in a git branch name.
 // Only allows [a-zA-Z0-9_/-], replacing all other characters with hyphens.
@@ -31,4 +35,24 @@ func SanitizeFileName(name string) string {
 		}
 	}
 	return result.String()
+}
+
+// ExpandPrompt substitutes issue placeholders in a prompt template.
+// Supported placeholders: {{ issue.id }}, {{ issue.identifier }},
+// {{ issue.title }}, {{ issue.description }}, {{ issue.labels }}.
+// If template is empty, returns issue.Description as the prompt.
+func ExpandPrompt(template string, issue types.Issue) string {
+	if template == "" {
+		return issue.Description
+	}
+	template = strings.ReplaceAll(template, "{{ issue.id }}", issue.ID)
+	template = strings.ReplaceAll(template, "{{ issue.identifier }}", issue.Identifier)
+	template = strings.ReplaceAll(template, "{{ issue.title }}", issue.Title)
+	template = strings.ReplaceAll(template, "{{ issue.description }}", issue.Description)
+	labels := ""
+	if len(issue.Labels) > 0 {
+		labels = strings.Join(issue.Labels, ", ")
+	}
+	template = strings.ReplaceAll(template, "{{ issue.labels }}", labels)
+	return strings.TrimSpace(template)
 }

@@ -166,6 +166,21 @@ func (o *Orchestrator) reconcileRunning() {
 func (o *Orchestrator) handleTimeout(run RunState, elapsed time.Duration) {
 	issueID := run.Issue.ID
 
+	// Atomically claim finalization so only one path (timeout handler or
+	// pipeline goroutine) persists the outcome and emits duplicate events.
+	var claimed bool
+	o.State.Mutate(issueID, func(r *RunState) {
+		switch r.Phase {
+		case types.PhaseFailed, types.PhaseSucceeded, types.PhaseTimedOut, types.PhaseStalled:
+			return // already finalized
+		}
+		r.Phase = types.PhaseTimedOut
+		claimed = true
+	})
+	if !claimed {
+		return
+	}
+
 	// Cancel the run's context. The pipeline runner will stop the agent.
 	o.mu.Lock()
 	if cancel, ok := o.running[issueID]; ok {
@@ -196,9 +211,6 @@ func (o *Orchestrator) handleTimeout(run RunState, elapsed time.Duration) {
 		FailureKind: types.StageFailureTimeout,
 	})
 
-	// Update phase to timed out
-	o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseTimedOut })
-
 	// Remove from active state (will be retried via backoff)
 	o.State.Remove(issueID)
 }
@@ -206,6 +218,21 @@ func (o *Orchestrator) handleTimeout(run RunState, elapsed time.Duration) {
 // handleStall handles a run that has stalled (no recent events).
 func (o *Orchestrator) handleStall(run RunState, lastEventAge time.Duration) {
 	issueID := run.Issue.ID
+
+	// Atomically claim finalization so only one path (stall handler or
+	// pipeline goroutine) persists the outcome and emits duplicate events.
+	var claimed bool
+	o.State.Mutate(issueID, func(r *RunState) {
+		switch r.Phase {
+		case types.PhaseFailed, types.PhaseSucceeded, types.PhaseTimedOut, types.PhaseStalled:
+			return // already finalized
+		}
+		r.Phase = types.PhaseStalled
+		claimed = true
+	})
+	if !claimed {
+		return
+	}
 
 	// Cancel the run's context. The pipeline runner will stop the agent.
 	o.mu.Lock()
@@ -239,9 +266,6 @@ func (o *Orchestrator) handleStall(run RunState, lastEventAge time.Duration) {
 		FailureKind: types.StageFailureTimeout,
 	})
 
-	// Update phase to stalled
-	o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseStalled })
-
 	// Remove from active state (will be retried via backoff)
 	o.State.Remove(issueID)
 }
@@ -267,16 +291,17 @@ func (o *Orchestrator) dispatchBackoff() {
 			return
 		}
 
-		// Consume the backoff entry before dispatching so it isn't dispatched
-		// repeatedly on every poll while the issue is already running.
-		o.Backoff.Remove(entry.IssueID)
-
-		// Re-claim the issue
+		// Re-claim the issue first. If the claim fails, leave the backoff
+		// entry in place so it will be retried on the next dispatchBackoff
+		// cycle with its original attempt number and stage preserved.
 		issue, err := o.Tracker.ClaimIssue(entry.IssueID)
 		if err != nil {
 			// Issue no longer available for dispatch.
 			continue
 		}
+
+		// Remove the backoff entry now that the issue is claimed and running.
+		o.Backoff.Remove(entry.IssueID)
 
 		if o.Recorder != nil {
 			_ = o.Recorder.EnsureIssue(issue)
@@ -489,14 +514,23 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 		var lastResult *pipeline.Result
 		for _, stage := range stages {
 			if runCtx.Err() != nil {
-				// If state was already removed by timeout/stall handler, skip.
-				if _, ok := o.State.Get(issueID); !ok {
+				// Atomically check if the timeout/stall handler already finalized
+				// this run. Only one path persists the outcome.
+				var claimed bool
+				o.State.Mutate(issueID, func(r *RunState) {
+					switch r.Phase {
+					case types.PhaseTimedOut, types.PhaseStalled, types.PhaseSucceeded, types.PhaseFailed:
+						return
+					}
+					r.Phase = types.PhaseFailed
+					claimed = true
+				})
+				if !claimed {
 					return
 				}
 
 				// Context cancelled between stages — treat as a failure so state is cleaned up.
 				err := runCtx.Err()
-				o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseFailed })
 				o.State.Remove(issueID)
 
 				nextAttempt := attempt + 1
@@ -555,14 +589,22 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 
 			result, err := runner.Run(stageCtx, issue, attempt, stage, wrappedEmit)
 
-			// If state was already removed by timeout/stall handler, skip.
-			if _, ok := o.State.Get(issueID); !ok {
-				return
-			}
-
 			if err != nil {
-				// Workspace or agent start failed.
-				o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseFailed })
+				// Atomically check if the timeout/stall handler already finalized
+				// this run before persisting a competing outcome.
+				var claimed bool
+				o.State.Mutate(issueID, func(r *RunState) {
+					switch r.Phase {
+					case types.PhaseTimedOut, types.PhaseStalled, types.PhaseSucceeded, types.PhaseFailed:
+						return
+					}
+					r.Phase = types.PhaseFailed
+					claimed = true
+				})
+				if !claimed {
+					return
+				}
+
 				o.State.Remove(issueID)
 
 				nextAttempt := attempt + 1
@@ -594,9 +636,22 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 			}
 
 			if !result.Success {
-				// Stage runtime failure.
+				// Atomically check if the timeout/stall handler already finalized
+				// this run before persisting a competing outcome.
+				var claimed bool
+				o.State.Mutate(issueID, func(r *RunState) {
+					switch r.Phase {
+					case types.PhaseTimedOut, types.PhaseStalled, types.PhaseSucceeded, types.PhaseFailed:
+						return
+					}
+					r.Phase = types.PhaseFailed
+					claimed = true
+				})
+				if !claimed {
+					return
+				}
+
 				nextAttempt := attempt + 1
-				o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseFailed })
 				o.State.Remove(issueID)
 
 				var errMsg string
@@ -743,25 +798,7 @@ func (o *Orchestrator) isClosed() bool {
 
 // buildPrompt builds the prompt from the template using issue data.
 func (o *Orchestrator) buildPrompt(issue types.Issue) string {
-	template := o.promptTmpl
-	if template == "" {
-		return issue.Description
-	}
-
-	// Simple template substitution
-	template = strings.ReplaceAll(template, "{{ issue.id }}", issue.ID)
-	template = strings.ReplaceAll(template, "{{ issue.identifier }}", issue.Identifier)
-	template = strings.ReplaceAll(template, "{{ issue.title }}", issue.Title)
-	template = strings.ReplaceAll(template, "{{ issue.description }}", issue.Description)
-
-	// Handle labels - comma-separated
-	labels := ""
-	if len(issue.Labels) > 0 {
-		labels = strings.Join(issue.Labels, ", ")
-	}
-	template = strings.ReplaceAll(template, "{{ issue.labels }}", labels)
-
-	return strings.TrimSpace(template)
+	return util.ExpandPrompt(o.promptTmpl, issue)
 }
 
 // finalizeAttempt captures postflight git state and finalizes the attempt
@@ -882,6 +919,8 @@ func (o *Orchestrator) captureCommit(ctx context.Context, dir string) string {
 }
 
 // classifyStageFailure maps a runtime error to a typed stage failure kind.
+// It checks sentinel errors before falling back to stage-based defaults so
+// that error classification does not depend on error message wording.
 func (o *Orchestrator) classifyStageFailure(err error, stage types.Stage) types.StageFailureKind {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return types.StageFailureTimeout
@@ -889,11 +928,10 @@ func (o *Orchestrator) classifyStageFailure(err error, stage types.Stage) types.
 	if err == nil {
 		return types.StageFailureToolError
 	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "workspace") {
+	if errors.Is(err, pipeline.ErrWorkspace) {
 		return types.StageFailureWorkspaceError
 	}
-	if strings.Contains(msg, "session start") || strings.Contains(msg, "agent start") {
+	if errors.Is(err, pipeline.ErrAgent) {
 		return types.StageFailureSessionStartError
 	}
 	switch stage {

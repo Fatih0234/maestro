@@ -176,6 +176,8 @@ func boardShow(args []string) error {
 		if summary.FinishedAt != nil {
 			fmt.Printf("Ready: %s ago\n", humanDuration(time.Since(*summary.FinishedAt)))
 		}
+	} else {
+		fmt.Printf("Note: diagnostic data unavailable: %v\n", summaryErr)
 	}
 
 	fmt.Println()
