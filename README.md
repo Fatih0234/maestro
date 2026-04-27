@@ -13,13 +13,9 @@ maestro board create "Fix login bug"  # add an issue
 maestro                              # start the orchestrator
 ```
 
-## Pipeline
+## How It Works
 
-Issues flow through stages. The orchestrator handles retries at the stage level.
-
-```
-todo → plan → execute → verify → in_review → done
-```
+![How it works — pipeline](how-it-works-pipeline.png)
 
 | Stage | What the agent does |
 |-------|---------------------|
@@ -28,7 +24,11 @@ todo → plan → execute → verify → in_review → done
 | **verify** | Confirm the changes satisfy the issue |
 | **human review** | Human inspects and approves/rejects |
 
-On success, the orchestrator marks the issue `in_review` and keeps the worktree intact for manual inspection. No auto-merge, no auto-cleanup.
+Issues flow through stages. The orchestrator handles retries at the stage level — if `verify` fails, only `verify` is retried with exponential backoff. On success, the issue enters `in_review` with the worktree preserved for manual inspection. **No auto-merge, no auto-cleanup.**
+
+## Architecture
+
+![Architecture](architecture-.png)
 
 ## CLI
 
