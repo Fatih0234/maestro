@@ -34,7 +34,7 @@ func TestValidate_OpenCodeProfileNotFound(t *testing.T) {
 		PollIntervalMs: 1000,
 		Tracker: TrackerConfig{
 			Type:        "internal",
-			BoardDir:    ".contrabass/orchestrator/board",
+			BoardDir:    ".contrabass/board",
 			IssuePrefix: "CB",
 		},
 		Agent: AgentConfig{

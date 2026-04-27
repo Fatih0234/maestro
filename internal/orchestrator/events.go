@@ -37,6 +37,7 @@ const (
 // Used by EventAgentStarted and EventTokensUpdated.
 type ProcessPayload struct {
 	IssueID   string
+	Title     string
 	Stage     types.Stage
 	Attempt   int
 	PID       int

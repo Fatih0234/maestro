@@ -2,28 +2,34 @@
 
 A minimal orchestrator for OpenCode coding agents. Poll a local board, create workspaces, dispatch agents, and monitor progress via TUI.
 
-**Contrabass-PI runs here, but agents work on a remote project.**
+Run it from inside any git project.
 
 ## Architecture
 
+Each project owns its own board and run records. The orchestrator is a CLI tool you invoke from the project directory.
+
 ```
-┌─────────────────────────────────┐
-│  Contrabass-PI (this directory) │  ← Orchestrator lives here
-│  ├── Board                      │  ← Issue tracking here
-│  ├── Run records                │  ← Persistent diagnostics
-│  ├── Orchestrator               │  ← Owns plan → execute → verify
-│  └── Agent runner               │  ← Spawns agents per stage
-└─────────────────────────────────┘
-                │ "work in /remote/project"
-                ▼
-┌─────────────────────────────────┐
-│  Remote Project                 │  ← Agents work here
-│  ├── Git history                │  ← Commits go here
-│  └── sibling worktree dir       │  ← e.g. ../<repo>.worktrees/CB-1
-└─────────────────────────────────┘
+my-project/
+├── WORKFLOW.md              ← Orchestrator config (YAML front matter + prompt template)
+├── .contrabass/             ← Git-ignored metadata
+│   ├── board/               ← Local issue tracker (file-based)
+│   │   ├── manifest.json
+│   │   └── issues/CB-*.json
+│   └── runs/                ← Persistent run diagnostics
+│       ├── _orchestrator/events.jsonl
+│       └── CB-1/
+│           ├── issue.json
+│           ├── summary.json
+│           └── attempts/001/...
+├── src/
+└── ...
+
+../my-project.worktrees/   ← Sibling worktrees (outside repo, clean)
+    └── CB-1/              ← Isolated workspace per issue
 ```
 
-Configure `WORKFLOW.md` to point `workspace.base_dir` at any project you want to work on.
+**To set up a new project:** `cd my-project && contrabass init`
+**To run the orchestrator:** `contrabass` (auto-discovers `WORKFLOW.md`)
 
 ## Orchestrator-Owned Pipeline
 
@@ -68,7 +74,7 @@ Ctrl+C and SIGTERM stop the orchestrator cleanly; shutdown is idempotent.
 
 ## Runtime records
 
-For each managed project, persistent run diagnostics live under `.contrabass/projects/<project>/runs/`.
+Persistent run diagnostics live beside the board under `.contrabass/runs/`.
 They include the orchestrator event stream, the issue and summary snapshots, and per-attempt prompt/output/git snapshots.
 
 These records are part of the source of truth when reviewing a finished run.
@@ -81,7 +87,7 @@ Inspired by [Contrabass](https://github.com/junhoyeo/contrabass), stripped to es
 |-----------|---------|
 | Config parser | Read `WORKFLOW.md` with YAML front matter |
 | Local board | File-based issue tracker |
-| Run records | Persistent run diagnostics under `.contrabass/projects/<project>/runs/` |
+| Run records | Persistent run diagnostics under `.contrabass/runs/` |
 | Workspace manager | Git worktree per issue (outside repo tree by default) |
 | OpenCode runner | HTTP + SSE to communicate with the agent |
 | Pipeline runner | Stage-aware runner: plan → execute → verify |
@@ -123,28 +129,12 @@ docs/
 
 ## Runtime and CLI
 
-- `--config WORKFLOW.md` — workflow file to load (defaults to `WORKFLOW.md`)
+- `contrabass init` — set up the current directory as a contrabass project (requires git)
+- `contrabass` — start the orchestrator (auto-discovers `WORKFLOW.md` or `.contrabass/WORKFLOW.md` in cwd)
+- `--config WORKFLOW.md` — workflow file to load (defaults to `WORKFLOW.md`, falls back to `.contrabass/WORKFLOW.md`)
 - `--dry-run` — run exactly one poll cycle and exit
 - `--no-tui` — run headless without Bubble Tea
 - `--log-level debug|info|warn|error` — severity filter; invalid values exit with an error
-- `--port 8080` — start a lightweight HTTP API with SSE event streaming (`0` = disabled, default)
-
-### HTTP API (when `--port` is set)
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/state` | GET | JSON snapshot of running, backoff, and review queues |
-| `/api/v1/events` | GET | Server-Sent Events stream; initial `snapshot` event followed by live orchestrator events |
-| `/api/v1/refresh` | POST | Trigger immediate poll (placeholder, returns 202 Accepted) |
-
-Example:
-```bash
-# Snapshot
-curl http://localhost:8080/api/v1/state
-
-# Live event stream
-curl -N http://localhost:8080/api/v1/events
-```
 
 ---
 
@@ -161,7 +151,7 @@ poll_interval_ms: 30000
 
 tracker:
   type: internal
-  board_dir: .contrabass/orchestrator/board
+  board_dir: .contrabass/board
   issue_prefix: CB
 
 agent:
@@ -172,7 +162,7 @@ opencode:
   profile: ws
 
 workspace:
-  base_dir: /path/to/project
+  base_dir: .
   branch_prefix: opencode/
 ---
 
@@ -182,47 +172,6 @@ Implement the following issue: {{ issue.title }}
 
 {{ issue.description }}
 ```
-
-### GitHub Issues tracker
-
-```yaml
----
-max_concurrency: 3
-poll_interval_ms: 30000
-
-tracker:
-  type: github
-  owner: my-org
-  repo: my-repo
-  token: ghp_xxxxxxxxxxxx
-  label_prefix: contrabass
-  assignee_bot: contrabass-bot
-
-agent:
-  type: opencode
-
-opencode:
-  binary_path: opencode serve
-  profile: ws
-
-workspace:
-  base_dir: /path/to/project
-  branch_prefix: opencode/
----
-
-# Prompt template
-
-Implement the following issue: {{ issue.title }}
-
-{{ issue.description }}
-```
-
-When using the GitHub tracker:
-- Open issues with no assignee are picked up as new work
-- The bot claims issues by assigning itself
-- `in_review` adds a `contrabass:review` label and posts a handoff comment
-- `done` closes the issue
-- Retry-queued issues are skipped until their backoff time passes
 
 ### Human review board commands
 

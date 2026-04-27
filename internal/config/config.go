@@ -26,7 +26,6 @@ type Config struct {
 
 	// Agent-specific settings (varies by agent type)
 	OpenCode *OpenCodeConfig `yaml:"opencode,omitempty"`
-	Codex    *CodexConfig    `yaml:"codex,omitempty"`
 
 	// Workspace settings
 	Workspace WorkspaceConfig `yaml:"workspace"`
@@ -41,14 +40,9 @@ type Config struct {
 
 // TrackerConfig holds tracker-specific settings.
 type TrackerConfig struct {
-	Type        string `yaml:"type"`         // Tracker type (internal, github, linear)
+	Type        string `yaml:"type"`         // Tracker type (internal)
 	BoardDir    string `yaml:"board_dir"`    // Local board directory
 	IssuePrefix string `yaml:"issue_prefix"` // Issue ID prefix (e.g., CB)
-	Owner       string `yaml:"owner"`        // GitHub owner (for github)
-	Repo        string `yaml:"repo"`         // GitHub repo (for github)
-	Token       string `yaml:"token"`        // GitHub token (for github)
-	LabelPrefix string `yaml:"label_prefix"` // GitHub label prefix (for github)
-	AssigneeBot string `yaml:"assignee_bot"` // GitHub bot assignee login (for github)
 }
 
 // AgentConfig holds agent-specific settings.
@@ -68,13 +62,6 @@ type OpenCodeConfig struct {
 	ConfigDir  string            `yaml:"config_dir"`  // Optional custom .opencode directory
 }
 
-// CodexConfig holds Codex-specific settings.
-type CodexConfig struct {
-	BinaryPath     string `yaml:"binary_path"`     // Path to codex binary
-	ApprovalPolicy string `yaml:"approval_policy"` // auto-edit, ask, never-edit
-	Sandbox        string `yaml:"sandbox"`         // none, docker, vm
-}
-
 // WorkspaceConfig holds workspace-specific settings.
 type WorkspaceConfig struct {
 	BaseDir      string `yaml:"base_dir"`      // Base directory for workspaces (default: .)
@@ -89,7 +76,7 @@ func DefaultConfig() *Config {
 		MaxRetryBackoffMs: 240000,
 		Tracker: TrackerConfig{
 			Type:        "internal",
-			BoardDir:    ".contrabass/orchestrator/board",
+			BoardDir:    ".contrabass/board",
 			IssuePrefix: "CB",
 		},
 		Agent: AgentConfig{
@@ -221,18 +208,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("tracker.type is required")
 	}
 
-	if c.Tracker.Type == "github" {
-		if strings.TrimSpace(c.Tracker.Owner) == "" {
-			return fmt.Errorf("tracker.owner is required when tracker.type is github")
-		}
-		if strings.TrimSpace(c.Tracker.Repo) == "" {
-			return fmt.Errorf("tracker.repo is required when tracker.type is github")
-		}
-		if strings.TrimSpace(c.Tracker.Token) == "" {
-			return fmt.Errorf("tracker.token is required when tracker.type is github")
-		}
-	}
-
 	if c.Agent.Type == "" {
 		return fmt.Errorf("agent.type is required")
 	}
@@ -245,13 +220,6 @@ func (c *Config) Validate() error {
 		}
 		if c.OpenCode.BinaryPath == "" {
 			return fmt.Errorf("opencode.binary_path is required")
-		}
-	case "codex":
-		if c.Codex == nil {
-			return fmt.Errorf("codex config is required when agent.type is codex")
-		}
-		if c.Codex.BinaryPath == "" {
-			return fmt.Errorf("codex.binary_path is required")
 		}
 	}
 

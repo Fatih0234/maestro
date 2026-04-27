@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -15,13 +16,15 @@ import (
 
 func runBoardCommand(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: contrabass board <command> [args]\n\nCommands:\n  list    List issues by state\n  show    Show issue details\n  approve Approve an issue\n  reject  Reject an issue\n  retry   Retry an issue")
+		return errors.New("usage: contrabass board <command> [args]\n\nCommands:\n  create  Create a new issue\n  list    List issues by state\n  show    Show issue details\n  approve Approve an issue\n  reject  Reject an issue\n  retry   Retry an issue")
 	}
 
 	cmd := args[0]
 	cmdArgs := args[1:]
 
 	switch cmd {
+	case "create":
+		return boardCreate(cmdArgs)
 	case "list":
 		return boardList(cmdArgs)
 	case "show":
@@ -35,6 +38,42 @@ func runBoardCommand(args []string) error {
 	default:
 		return fmt.Errorf("unknown board command: %q", cmd)
 	}
+}
+
+// boardCreate creates a new issue on the local board.
+func boardCreate(args []string) error {
+	fs := flag.NewFlagSet("board create", flag.ExitOnError)
+	description := fs.String("description", "", "issue description")
+	labelsStr := fs.String("labels", "", "comma-separated labels")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if len(fs.Args()) < 1 {
+		return errors.New("usage: contrabass board create <title> [--description <desc>] [--labels <labels>]")
+	}
+	title := fs.Args()[0]
+
+	var labels []string
+	if *labelsStr != "" {
+		for _, l := range strings.Split(*labelsStr, ",") {
+			labels = append(labels, strings.TrimSpace(l))
+		}
+	}
+
+	_, tr, _, recorder, err := buildDeps(*configPath)
+	if err != nil {
+		return err
+	}
+	defer recorder.Close()
+
+	issue, err := tr.CreateIssue(title, *description, labels)
+	if err != nil {
+		return fmt.Errorf("creating issue: %w", err)
+	}
+
+	fmt.Printf("Created issue %s: %s\n", issue.ID, issue.Title)
+	return nil
 }
 
 // boardList lists issues by state.

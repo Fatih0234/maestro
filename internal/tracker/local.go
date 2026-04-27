@@ -26,7 +26,7 @@ const (
 
 // Default paths
 const (
-	DefaultBoardDir    = ".contrabass/orchestrator/board"
+	DefaultBoardDir    = ".contrabass/board"
 	DefaultIssuePrefix = "CB"
 	SchemaVersion      = "3" // v3: added in_review board state
 )
@@ -396,49 +396,6 @@ func (t *LocalTracker) toTypesIssue(issue Issue) types.Issue {
 		CreatedAt:   issue.CreatedAt,
 		UpdatedAt:   issue.UpdatedAt,
 	}
-}
-
-// IssuesInReview returns all issues currently in the in_review state.
-func (t *LocalTracker) IssuesInReview() ([]types.Issue, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if err := t.ensureBoardLocked(); err != nil {
-		return nil, err
-	}
-
-	entries, err := os.ReadDir(t.issuesDir())
-	if err != nil {
-		return nil, fmt.Errorf("reading issues directory: %w", err)
-	}
-
-	issues := make([]types.Issue, 0)
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-
-		var issue Issue
-		if err := readJSONFile(filepath.Join(t.issuesDir(), entry.Name()), &issue); err != nil {
-			return nil, err
-		}
-
-		if issue.State == StateInReview {
-			issues = append(issues, t.toTypesIssue(issue))
-		}
-	}
-
-	slices.SortFunc(issues, func(a, b types.Issue) int {
-		if a.CreatedAt.Equal(b.CreatedAt) {
-			return strings.Compare(a.ID, b.ID)
-		}
-		if a.CreatedAt.Before(b.CreatedAt) {
-			return -1
-		}
-		return 1
-	})
-
-	return issues, nil
 }
 
 // ListAllIssues returns all known issues regardless of state.

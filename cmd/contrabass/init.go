@@ -41,6 +41,10 @@ opencode:
   port: 0
   profile: ""    # optional: your OpenCode profile name (~/.config/opencode/profiles/)
   agent: ""      # optional: your default agent name (e.g. build, coder, plan)
+  # agents:       # optional: per-stage agent mapping
+  #   plan: plan
+  #   execute: execute
+  #   verify: verify
 workspace:
   base_dir: .
   branch_prefix: contrabass/

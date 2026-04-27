@@ -180,8 +180,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.tableSelected = len(m.sessionRows) - 1
 				}
 			}
-		case "r":
-			// Force refresh - could trigger a manual poll in orchestrator
 		case "esc":
 			m.scrollPos = 0
 		}
@@ -268,8 +266,8 @@ func (m Model) renderTable() string {
 
 	// Render inline (previously Table.View)
 	headerStyle := lipgloss.NewStyle().Bold(true).Faint(true)
-	header := headerStyle.Render(fmt.Sprintf("%-8s %-24s %-7s %-8s %-10s %-6s %s\n",
-		"Issue", "Title", "Stage", "PID", "Tokens", "Age", "Att"))
+	header := headerStyle.Render(fmt.Sprintf("%-2s %-8s %-24s %-7s %-8s %-10s %-6s %s\n",
+		"", "Issue", "Title", "Stage", "PID", "Tokens", "Age", "Att"))
 
 	var rowStrs []string
 	for _, row := range sessionRows {
@@ -295,7 +293,7 @@ func (m Model) renderTable() string {
 			attemptStr = "#1"
 		}
 
-		rowStr := fmt.Sprintf("%s %-8s %-24s %-7s %8d %-10s %-6s %-3s\n",
+		rowStr := fmt.Sprintf("%-2s %-8s %-24s %-7s %8d %-10s %-6s %-3s\n",
 			glyph, row.IssueID, title, stageStr, row.PID, tokens, ageStr, attemptStr)
 
 		if isActiveStatus(row.Status) {
@@ -510,6 +508,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 			}
 			m.agents[event.IssueID] = AgentRow{
 				IssueID:   issueID,
+				Title:     payload.Title,
 				Stage:     payload.Stage,
 				Attempt:   payload.Attempt,
 				Status:    "running",
@@ -530,6 +529,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 				row.LastEvent = fmt.Sprintf("[%s] tokens %s/%s", compactStage(row.Stage), formatTokensShort(payload.TokensIn), formatTokensShort(payload.TokensOut))
 				m.agents[event.IssueID] = row
 			}
+			m.recalcStats()
 		}
 
 	case orchestrator.EventStageStarted:
@@ -576,6 +576,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 				// Remove from agents
 				delete(m.agents, event.IssueID)
 			}
+			m.recalcStats()
 			m.agentSortDirty = true
 		}
 
@@ -626,6 +627,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 				delete(m.agents, issueID)
 				delete(m.backoffs, issueID)
 				delete(m.stageProgress, issueID)
+				m.recalcStats()
 				m.agentSortDirty = true
 			}
 		}
@@ -636,6 +638,7 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		m.reviewKeys = nil
 		delete(m.backoffs, event.IssueID)
 		delete(m.stageProgress, event.IssueID)
+		m.recalcStats()
 		m.agentSortDirty = true
 
 	case orchestrator.EventTimeoutDetected:
@@ -657,6 +660,9 @@ func (m Model) applyOrchestratorEvent(event types.OrchestratorEvent) Model {
 		if payload, ok := event.Payload.(map[string]interface{}); ok {
 			if running, ok := payload["RunningAgents"].(int); ok {
 				m.stats.RunningAgents = running
+			}
+			if max, ok := payload["MaxAgents"].(int); ok {
+				m.stats.MaxAgents = max
 			}
 		}
 	}
@@ -694,6 +700,17 @@ func (m Model) refreshDerivedFields(now time.Time) Model {
 	}
 
 	return m
+}
+
+// recalcStats recomputes the total token count across all running agents.
+func (m *Model) recalcStats() {
+	var totalIn, totalOut int64
+	for _, r := range m.agents {
+		totalIn += r.TokensIn
+		totalOut += r.TokensOut
+	}
+	m.stats.TokensIn = totalIn
+	m.stats.TokensOut = totalOut
 }
 
 // pushEvent adds an event to the log.

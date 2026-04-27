@@ -7,8 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -26,7 +24,6 @@ import (
 	"github.com/fatihkarahan/contrabass-pi/internal/tracker"
 	"github.com/fatihkarahan/contrabass-pi/internal/tui"
 	"github.com/fatihkarahan/contrabass-pi/internal/types"
-	"github.com/fatihkarahan/contrabass-pi/internal/web"
 	"github.com/fatihkarahan/contrabass-pi/internal/workspace"
 )
 
@@ -35,7 +32,6 @@ var (
 	noTUI      = flag.Bool("no-tui", false, "run without TUI (headless mode)")
 	dryRun     = flag.Bool("dry-run", false, "exit after first poll cycle")
 	logLevel   = flag.String("log-level", "info", "log level (debug/info/warn/error)")
-	port       = flag.Int("port", 0, "HTTP API port (0 = disabled)")
 )
 
 var version = "dev"
@@ -126,16 +122,6 @@ func main() {
 	// init does not need config discovery.
 	if len(args) > 0 && args[0] == "init" {
 		if err := runInit(args[1:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// Dispatch to doctor subcommand before config resolution so it can
-	// diagnose missing config without failing fatally.
-	if len(args) > 0 && args[0] == "doctor" {
-		if err := runDoctor(args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -270,22 +256,10 @@ func buildDeps(configPath string) (*config.Config, types.IssueTracker, workspace
 	if boardDir == "" {
 		boardDir = ".contrabass/board"
 	}
-	var tr types.IssueTracker
-	switch cfg.Tracker.Type {
-	case "github":
-		tr = tracker.NewGitHub(
-			cfg.Tracker.Owner,
-			cfg.Tracker.Repo,
-			cfg.Tracker.Token,
-			cfg.Tracker.LabelPrefix,
-			cfg.Tracker.AssigneeBot,
-		)
-	default:
-		tr = tracker.New(tracker.Config{
-			BoardDir:    boardDir,
-			IssuePrefix: cfg.Tracker.IssuePrefix,
-		})
-	}
+	tr := tracker.New(tracker.Config{
+		BoardDir:    boardDir,
+		IssuePrefix: cfg.Tracker.IssuePrefix,
+	})
 
 	wsMgr := workspace.New(workspace.Config{
 		BaseDir:      cfg.Workspace.BaseDir,
@@ -348,98 +322,6 @@ func run() error {
 	return runHeadless(ctx, orch, sigChan, logger)
 }
 
-// snapshotAdapter adapts orchestrator state to the web.SnapshotProvider interface.
-type snapshotAdapter struct {
-	orch *orchestrator.Orchestrator
-}
-
-func (a *snapshotAdapter) Snapshot() web.Snapshot {
-	runs := a.orch.State.GetAll()
-	running := make([]web.RunSnapshot, 0, len(runs))
-	var totalTokensIn, totalTokensOut int64
-
-	for _, run := range runs {
-		pid := 0
-		if run.Process != nil {
-			pid = run.Process.PID
-		}
-		running = append(running, web.RunSnapshot{
-			IssueID:     run.Issue.ID,
-			Title:       run.Issue.Title,
-			Stage:       run.Stage.String(),
-			Attempt:     run.Attempt,
-			PID:         pid,
-			TokensIn:    run.TokensIn,
-			TokensOut:   run.TokensOut,
-			StartedAt:   run.StartedAt,
-			LastEventAt: run.LastEventAt,
-			Error:       run.Error,
-		})
-		totalTokensIn += run.TokensIn
-		totalTokensOut += run.TokensOut
-	}
-
-	backoffEntries := a.orch.Backoff.GetAll()
-	backoff := make([]web.BackoffSnapshot, 0, len(backoffEntries))
-	for i := range backoffEntries {
-		entry := &backoffEntries[i]
-		backoff = append(backoff, web.BackoffSnapshot{
-			IssueID: entry.IssueID,
-			Stage:   entry.Stage.String(),
-			Attempt: entry.Attempt,
-			RetryAt: entry.RetryAt,
-			Error:   entry.Error,
-		})
-	}
-
-	review := make([]web.ReviewSnapshot, 0)
-	if a.orch.Tracker != nil {
-		issues, err := a.orch.Tracker.IssuesInReview()
-		if err != nil {
-			log.Printf("[web] failed to get issues in review: %v", err)
-		} else {
-			for _, issue := range issues {
-				review = append(review, web.ReviewSnapshot{
-					IssueID: issue.ID,
-					Title:   issue.Title,
-					ReadyAt: issue.UpdatedAt,
-				})
-			}
-		}
-	}
-
-	return web.Snapshot{
-		Running: running,
-		Backoff: backoff,
-		Review:  review,
-		Stats: web.StatsSnapshot{
-			RunningCount:   len(running),
-			TotalTokensIn:  totalTokensIn,
-			TotalTokensOut: totalTokensOut,
-		},
-	}
-}
-
-// maybeStartWebServer starts the HTTP API server if --port is set.
-func maybeStartWebServer(ctx context.Context, orch *orchestrator.Orchestrator) *web.Server {
-	if *port <= 0 {
-		return nil
-	}
-
-	hub := web.NewHub()
-	provider := &snapshotAdapter{orch: orch}
-	srv := web.NewServer(fmt.Sprintf("127.0.0.1:%d", *port), provider, hub, orch.Events, orch.Config.MaxConcurrency)
-	srv.StartEventBridge(ctx)
-
-	go func() {
-		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
-			fmt.Fprintf(os.Stderr, "HTTP server error: %v\n", err)
-		}
-	}()
-
-	return srv
-}
-
 // newAgentRunnerFromConfig creates the appropriate agent runner based on cfg.Agent.Type.
 func newAgentRunnerFromConfig(cfg *config.Config) (types.AgentRunner, error) {
 	switch cfg.Agent.Type {
@@ -457,23 +339,12 @@ func newAgentRunnerFromConfig(cfg *config.Config) (types.AgentRunner, error) {
 			cfg.OpenCode.Agent,
 			cfg.OpenCode.ConfigDir,
 		), nil
-	case "codex":
-		return nil, fmt.Errorf("agent.type=%s is not supported yet", cfg.Agent.Type)
 	default:
 		return nil, fmt.Errorf("agent.type=%s is not supported", cfg.Agent.Type)
 	}
 }
 
 func runWithTUI(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal, logger *cliLogger) error {
-	// Start web server if requested
-	if srv := maybeStartWebServer(ctx, orch); srv != nil {
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = srv.Shutdown(shutdownCtx)
-		}()
-	}
-
 	// Create TUI model
 	tuiModel := tui.NewModel()
 
@@ -528,14 +399,6 @@ func runWithTUI(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-
 
 // runDryRun runs a single orchestrator poll cycle and exits.
 func runDryRun(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal, logger *cliLogger) error {
-	if srv := maybeStartWebServer(ctx, orch); srv != nil {
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = srv.Shutdown(shutdownCtx)
-		}()
-	}
-
 	eventDone := make(chan struct{})
 	go func() {
 		defer close(eventDone)
@@ -561,14 +424,6 @@ func runDryRun(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-c
 
 // runHeadless runs the orchestrator without TUI, logging to stdout.
 func runHeadless(ctx context.Context, orch *orchestrator.Orchestrator, sigChan <-chan os.Signal, logger *cliLogger) error {
-	if srv := maybeStartWebServer(ctx, orch); srv != nil {
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = srv.Shutdown(shutdownCtx)
-		}()
-	}
-
 	// Start event log goroutine
 	eventDone := make(chan struct{})
 	go func() {

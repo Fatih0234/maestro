@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -330,6 +331,24 @@ func (m *MockTracker) ListAllIssues() ([]types.Issue, error) {
 		result = append(result, issue)
 	}
 	return result, nil
+}
+
+// CreateIssue implements IssueTracker.CreateIssue
+func (m *MockTracker) CreateIssue(title, description string, labels []string) (types.Issue, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	id := fmt.Sprintf("MOCK-%d", len(m.issues)+1)
+	issue := types.Issue{
+		ID:          id,
+		Identifier:  id,
+		Title:       title,
+		Description: description,
+		State:       types.StateUnclaimed,
+		Labels:      labels,
+	}
+	m.issues[id] = issue
+	return issue, nil
 }
 
 // ClaimCount returns how many times an issue was claimed.

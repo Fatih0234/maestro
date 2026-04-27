@@ -92,21 +92,6 @@ type Issue struct {
 	CreatedAt   time.Time  `json:"created_at"`            // When issue was created
 	UpdatedAt   time.Time  `json:"updated_at"`            // Last modification
 }
-
-// RunAttempt tracks an active or completed run for an issue.
-
-type RunAttempt struct {
-	IssueID       string    // Which issue this belongs to
-	Phase         RunPhase  // Current execution phase
-	Attempt       int       // Which attempt this is (1, 2, 3, ...)
-	PID           int       // Process ID of the agent process
-	StartTime     time.Time // When the run started
-	TokensIn      int64     // Tokens sent to agent
-	TokensOut     int64     // Tokens received from agent
-	SessionID     string    // Agent session identifier
-	WorkspacePath string    // Path to the workspace directory
-}
-
 // BackoffEntry represents a queued retry for a failed issue.
 type BackoffEntry struct {
 	IssueID string    // Which issue to retry
@@ -161,11 +146,11 @@ type IssueTracker interface {
 	// SetRetryQueue marks an issue as waiting for retry. Not all trackers
 	// may support this; those that don't should return an error.
 	SetRetryQueue(id string, retryAt time.Time) (Issue, error)
-	// IssuesInReview returns all issues currently awaiting human review.
-	IssuesInReview() ([]Issue, error)
 	// ListAllIssues returns all known issues regardless of state.
 	// For remote trackers this may be limited to open/non-archived issues.
 	ListAllIssues() ([]Issue, error)
+	// CreateIssue creates a new issue with the given title, description, and labels.
+	CreateIssue(title, description string, labels []string) (Issue, error)
 }
 
 // OrchestratorEvent represents a high-level event in the orchestrator lifecycle.

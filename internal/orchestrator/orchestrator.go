@@ -120,7 +120,10 @@ func (o *Orchestrator) poll() {
 	}
 
 	o.emit(EventPollStarted, "", struct{}{})
-	defer o.emit(EventPollCompleted, "", struct{}{})
+	defer o.emit(EventPollCompleted, "", map[string]interface{}{
+		"RunningAgents": o.State.Len(),
+		"MaxAgents":     o.Config.MaxConcurrency,
+	})
 
 	// 1. ReconcileRunning — check stalls, timeouts
 	o.reconcileRunning()
@@ -468,6 +471,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 						}
 						o.emit(EventAgentStarted, issueID, ProcessPayload{
 							IssueID:   issueID,
+							Title:     issue.Title,
 							Stage:     currentStage,
 							Attempt:   attempt,
 							PID:       pid,

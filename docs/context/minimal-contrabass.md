@@ -90,7 +90,7 @@ agent_timeout_ms: 900000
 stall_timeout_ms: 60000
 tracker:
   type: internal
-  board_dir: .contrabass/orchestrator/board
+  board_dir: .contrabass/board
   issue_prefix: CB
 agent:
   type: opencode
@@ -126,7 +126,7 @@ workspace:
 | `agent_timeout_ms` | int | 900000 | Agent timeout in ms |
 | `stall_timeout_ms` | int | 60000 | Stall detection timeout in ms |
 | `tracker.type` | string | internal | Tracker type |
-| `tracker.board_dir` | string | .contrabass/orchestrator/board | Local board path |
+| `tracker.board_dir` | string | .contrabass/board | Local board path |
 | `tracker.issue_prefix` | string | CB | Issue ID prefix |
 | `agent.type` | string | opencode | Agent type |
 | `opencode.binary_path` | string | opencode serve | OpenCode binary |
@@ -143,20 +143,16 @@ Per-stage agent selection: `opencode.agents` maps stage names (`plan`, `execute`
 
 ### 2. Local Board Tracker
 
-File-based issue storage:
+File-based issue storage inside each project:
 
 ```
-.contrabass/
-├── orchestrator/
-│   ├── WORKFLOW.md          # Active orchestrator config
-│   └── board/               # Issues for current project
-│       ├── manifest.json
-│       └── issues/
-│           └── CB-*.json
-└── projects/
-    └── <project-name>/       # Per-project config + issues
-        ├── WORKFLOW.md
-        └── board/
+my-project/
+├── WORKFLOW.md              # Orchestrator config
+└── .contrabass/
+    └── board/               # Issues for this project
+        ├── manifest.json
+        └── issues/
+            └── CB-*.json
 ```
 
 **manifest.json:**
@@ -197,12 +193,12 @@ Issue states serialize as string labels (`todo`, `in_progress`, etc.) rather tha
 
 ### 3. Runtime Records
 
-When the board lives under `.contrabass/projects/<project>/board/`, the recorder stores run diagnostics in the sibling `.contrabass/projects/<project>/runs/` directory.
+The recorder stores run diagnostics in `.contrabass/runs/` (sibling to the board directory).
 
 Typical contents:
 
 ```bash
-.contrabass/projects/<project>/runs/
+.contrabass/runs/
 ├── _orchestrator/
 │   └── events.jsonl
 └── CB-1/
@@ -628,17 +624,23 @@ type OrchestratorEvent struct {
 ## CLI Interface
 
 ```bash
-# Run with TUI
-./contrabass --config WORKFLOW.md
+# Initialize a project (creates .contrabass/ + WORKFLOW.md)
+contrabass init
+
+# Run with TUI (auto-discovers WORKFLOW.md or .contrabass/WORKFLOW.md)
+contrabass
+
+# Run with explicit config
+contrabass --config WORKFLOW.md
 
 # Run headless
-./contrabass --config WORKFLOW.md --no-tui
+contrabass --no-tui
 
 # Run with custom log level
-./contrabass --config WORKFLOW.md --log-level debug
+contrabass --log-level debug
 
 # Dry run (exactly one poll cycle, then exit)
-./contrabass --config WORKFLOW.md --dry-run
+contrabass --dry-run
 ```
 
 ## Future Extensions (Out of Scope)

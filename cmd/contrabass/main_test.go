@@ -65,17 +65,6 @@ func TestNewAgentRunnerFromConfig_OpenCodeMissingBlock(t *testing.T) {
 	}
 }
 
-func TestNewAgentRunnerFromConfig_CodexNotSupported(t *testing.T) {
-	cfg := &config.Config{
-		Agent: config.AgentConfig{Type: "codex"},
-		Codex: &config.CodexConfig{BinaryPath: "codex"},
-	}
-	_, err := newAgentRunnerFromConfig(cfg)
-	if err == nil {
-		t.Fatal("expected error for codex agent type")
-	}
-}
-
 func TestNewAgentRunnerFromConfig_UnknownType(t *testing.T) {
 	cfg := &config.Config{
 		Agent: config.AgentConfig{Type: "unknown-agent"},
