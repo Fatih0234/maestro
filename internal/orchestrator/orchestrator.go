@@ -780,6 +780,13 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 			)
 		}
 
+		// Persist the plan so it is available if the issue is rejected later.
+		if issue.Plan != "" {
+			if _, pErr := o.Tracker.SetPlan(issueID, issue.Plan); pErr != nil {
+				// Non-fatal — plan is also in diagnostics stage artifacts.
+			}
+		}
+
 		if _, err := o.Tracker.UpdateIssueState(issueID, types.StateInReview); err != nil {
 			nextAttempt := attempt + 1
 			o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseFailed })

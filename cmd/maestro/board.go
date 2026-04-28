@@ -374,17 +374,13 @@ func boardReject(args []string) error {
 		return fmt.Errorf("loading attempt recorder: %w", err)
 	}
 
-	// Persist human feedback so the agent sees it on retry.
-	if *message != "" {
-		if _, err := tr.SetFeedback(issue.ID, *message); err != nil {
-			return fmt.Errorf("setting feedback: %w", err)
-		}
-	}
-
-	// Update tracker state first so we never write a decision artifact
-	// without the tracker reflecting the transition.
-	if _, err := tr.UpdateIssueState(issue.ID, types.StateUnclaimed); err != nil {
-		return fmt.Errorf("updating issue state: %w", err)
+	// Queue retry from execute stage, carrying feedback and plan forward.
+	// The orchestrator will pick this up on the next poll and resume from
+	// execute (not plan), so the agent sees its old code, the plan, and the
+	// rejection feedback all in context.
+	retryAt := time.Now().UTC().Add(5 * time.Second)
+	if _, err := tr.SetRetryQueue(issue.ID, retryAt, attempt+1, types.StageExecute, *message, issue.Plan); err != nil {
+		return fmt.Errorf("queueing retry for rejection: %w", err)
 	}
 
 	decision := types.ReviewDecision{

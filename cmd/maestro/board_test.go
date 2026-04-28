@@ -299,8 +299,17 @@ func TestBoardReject_UpdatesStateAndWritesDecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue: %v", err)
 	}
-	if updated.State != types.StateUnclaimed {
-		t.Errorf("state = %v, want unclaimed", updated.State)
+	if updated.State != types.StateRetryQueued {
+		t.Errorf("state = %v, want retry_queued", updated.State)
+	}
+	if updated.RetryStage != types.StageExecute {
+		t.Errorf("retry_stage = %v, want execute", updated.RetryStage)
+	}
+	if updated.RetryAttempt != 2 {
+		t.Errorf("retry_attempt = %d, want 2", updated.RetryAttempt)
+	}
+	if updated.Feedback != "Needs tests" {
+		t.Errorf("feedback = %q, want %q", updated.Feedback, "Needs tests")
 	}
 
 	decision, err := recorder.LoadReviewDecision(issue.ID, 1)

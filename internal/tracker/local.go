@@ -311,8 +311,8 @@ func (t *LocalTracker) UpdateIssueState(id string, state types.IssueState) (type
 		issue.RetryAttempt = 0
 		issue.RetryStage = ""
 	}
-	// Clear feedback/plan when work is completed or under review.
-	if state == types.StateInReview || state == types.StateReleased {
+	// Clear feedback/plan only when work is fully completed (approved).
+	if state == types.StateReleased {
 		issue.Feedback = ""
 		issue.Plan = ""
 	}
@@ -456,6 +456,24 @@ func (t *LocalTracker) ListAllIssues() ([]types.Issue, error) {
 	})
 
 	return issues, nil
+}
+
+// SetPlan persists the implementation plan on the issue.
+func (t *LocalTracker) SetPlan(id string, plan string) (types.Issue, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	issue, err := t.loadIssueLocked(id)
+	if err != nil {
+		return types.Issue{}, err
+	}
+
+	issue.Plan = plan
+	issue.UpdatedAt = time.Now().UTC()
+	if err := writeJSONAtomic(t.issuePath(id), issue); err != nil {
+		return types.Issue{}, err
+	}
+	return t.toTypesIssue(issue), nil
 }
 
 // SetFeedback updates the human review feedback for an issue.

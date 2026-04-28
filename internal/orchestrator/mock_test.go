@@ -271,6 +271,21 @@ func (m *MockTracker) GetIssue(id string) (types.Issue, error) {
 	return issue, nil
 }
 
+// SetPlan implements IssueTracker.SetPlan
+func (m *MockTracker) SetPlan(id string, plan string) (types.Issue, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	issue, ok := m.issues[id]
+	if !ok {
+		return types.Issue{}, errors.New("issue not found")
+	}
+
+	issue.Plan = plan
+	m.issues[id] = issue
+	return issue, nil
+}
+
 // SetFeedback implements IssueTracker.SetFeedback
 func (m *MockTracker) SetFeedback(id string, feedback string) (types.Issue, error) {
 	m.mu.Lock()
@@ -307,7 +322,7 @@ func (m *MockTracker) UpdateIssueState(id string, state types.IssueState) (types
 		issue.RetryAttempt = 0
 		issue.RetryStage = ""
 	}
-	if state == types.StateInReview || state == types.StateReleased {
+	if state == types.StateReleased {
 		issue.Feedback = ""
 		issue.Plan = ""
 	}

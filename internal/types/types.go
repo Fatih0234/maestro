@@ -155,6 +155,8 @@ type IssueTracker interface {
 	UpdateIssueState(id string, state IssueState) (Issue, error)
 	// SetFeedback updates the human review feedback for an issue.
 	SetFeedback(id string, feedback string) (Issue, error)
+	// SetPlan persists the implementation plan on the issue for the next retry.
+	SetPlan(id string, plan string) (Issue, error)
 	// SetRetryQueue marks an issue as waiting for retry and persists retry
 	// context needed by resumed retries (feedback + plan). Not all trackers
 	// may support this; those that don't should return an error.
