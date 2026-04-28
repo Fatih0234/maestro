@@ -13,6 +13,7 @@ import (
 const (
 	EventPollStarted         = "poll_started"
 	EventIssueClaimed        = "issue.claimed"
+	EventIssueReleased       = "issue.released"
 	EventWorkspaceCreated    = "workspace.created"
 	EventPromptBuilt         = "prompt.built"
 	EventAgentStarted        = "agent.started"

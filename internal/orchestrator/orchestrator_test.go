@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -540,6 +541,8 @@ func TestOrchestrator_DispatchReadyRestoresPersistedRetryStageAndAttempt(t *test
 		RetryAfter:   &retryAt,
 		RetryAttempt: 2,
 		RetryStage:   types.StageExecute,
+		Feedback:     "verification failed: missing edge-case handling",
+		Plan:         "Update parser.go and add regression test",
 		CreatedAt:    time.Now(),
 	}
 	tracker := NewMockTracker([]types.Issue{issue})
@@ -572,6 +575,16 @@ func TestOrchestrator_DispatchReadyRestoresPersistedRetryStageAndAttempt(t *test
 	if startedPlan {
 		t.Fatal("did not expect plan stage to restart for persisted retry")
 	}
+	if len(runner.Prompts) < 2 {
+		t.Fatalf("expected execute+verify prompts, got %d", len(runner.Prompts))
+	}
+	if !strings.Contains(runner.Prompts[0], issue.Plan) {
+		t.Fatalf("execute prompt missing persisted plan: %q", runner.Prompts[0])
+	}
+	if !strings.Contains(runner.Prompts[0], issue.Feedback) {
+		t.Fatalf("execute prompt missing persisted feedback: %q", runner.Prompts[0])
+	}
+	// Verify prompt is simplified and no longer includes the plan.
 }
 
 func TestOrchestrator_HandleAgentDone_HandoffStateUpdateFailureQueuesRetry(t *testing.T) {
@@ -782,8 +795,8 @@ func TestOrchestrator_MultiStage_VerifyFailureBlocksReview(t *testing.T) {
 		t.Errorf("Backoff.Len() = %d, want 1", orch.Backoff.Len())
 	}
 	entry, _ := orch.Backoff.Get("CB-1")
-	if entry.Stage != types.StageVerify {
-		t.Errorf("retry stage = %v, want verify", entry.Stage)
+	if entry.Stage != types.StageExecute {
+		t.Errorf("retry stage = %v, want execute (verify failure loops back to execute)", entry.Stage)
 	}
 	// 3 start calls (plan + execute succeeded, verify failed)
 	if got := runner.StartCallCount(); got != 3 {
@@ -812,6 +825,206 @@ func TestOrchestrator_VerifyCleanExitFailedResultQueuesRetry(t *testing.T) {
 	}
 	if tracker.UpdateState["CB-1"] == types.StateInReview {
 		t.Fatal("issue should not transition to in_review")
+	}
+}
+
+// TestOrchestrator_VerifyFailureLoopsBackToExecuteWithFeedback exercises the
+// full verify→execute→verify feedback loop:
+// 1. Plan succeeds, execute succeeds, verify fails
+// 2. Retry is queued for execute (not verify) with the failure as feedback
+// 3. On retry, execute receives the feedback in its prompt
+// 4. If execute+verify then succeed, the issue reaches in_review
+func TestOrchestrator_VerifyFailureLoopsBackToExecuteWithFeedback(t *testing.T) {
+	cfg := testConfig()
+	cfg.MaxRetryBackoffMs = 10 // fast backoff
+
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Add error handling to processPayment")})
+	runner := NewMockAgentRunner()
+	// First attempt: verify fails with a specific message
+	runner.PerStageDoneError = map[types.Stage]error{
+		types.StageVerify: errors.New("verification failed: missing error handling in processPayment"),
+	}
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	events := NewEventCollector(orch.Events)
+
+	// --- Phase 1: first attempt ---
+	orch.poll()
+	time.Sleep(300 * time.Millisecond)
+
+	// Backoff entry should target execute (the loop-back), not verify
+	entry, ok := orch.Backoff.Get("CB-1")
+	if !ok {
+		t.Fatal("expected backoff entry after verify failure")
+	}
+	if entry.Stage != types.StageExecute {
+		t.Errorf("retry stage = %v, want execute (verify failure loops back)", entry.Stage)
+	}
+	if entry.Error == "" {
+		t.Error("expected error message in backoff entry")
+	}
+	t.Logf("backoff: stage=%v error=%q", entry.Stage, entry.Error)
+
+	// --- Phase 2: retry attempt (verify succeeds this time) ---
+	delete(runner.PerStageDoneError, types.StageVerify)
+
+	// Wait for backoff to become ready, then trigger dispatch
+	time.Sleep(100 * time.Millisecond)
+	orch.poll()
+	time.Sleep(300 * time.Millisecond)
+
+	// Should now reach review
+	if !events.Has(EventIssueReadyForReview) {
+		t.Error("expected IssueReadyForReview after verify→execute→verify loop succeeds")
+	}
+	if tracker.UpdateState["CB-1"] != types.StateInReview {
+		t.Errorf("issue state = %v, want in_review", tracker.UpdateState["CB-1"])
+	}
+
+	// The retry's execute prompt must include the verification feedback
+	found := false
+	for _, prompt := range runner.Prompts {
+		if strings.Contains(prompt, "IMPORTANT: Your previous attempt was reviewed") &&
+			strings.Contains(prompt, "verification failed: missing error handling") {
+			found = true
+			t.Logf("execute retry prompt contains feedback:\n%s", prompt)
+			break
+		}
+	}
+	if !found {
+		t.Errorf("execute retry prompt should contain verification feedback; got %d prompts", len(runner.Prompts))
+		for i, p := range runner.Prompts {
+			t.Logf("  prompt[%d]: %s", i, p)
+		}
+	}
+
+	// Call count: plan + execute + verify (1st) + execute + verify (2nd) = 5
+	if got := runner.StartCallCount(); got != 5 {
+		t.Errorf("StartCallCount = %d, want 5 (plan+exec+ver + exec+ver retry)", got)
+	}
+}
+
+// TestOrchestrator_VerifyFailureResumePreservesPlanAndFeedback verifies that
+// retry context survives process restart semantics: first orchestrator queues
+// retry_queued with metadata, second orchestrator resumes from tracker state.
+func TestOrchestrator_VerifyFailureResumePreservesPlanAndFeedback(t *testing.T) {
+	cfg := testConfig()
+	cfg.MaxRetryBackoffMs = 10
+
+	const planText = "Plan: update parser.go and add nil-guard tests"
+	const verifyFailure = "verification failed: nil pointer handling still missing"
+
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Fix parser nil handling")})
+	runner1 := NewMockAgentRunner()
+	runner1.EventsToSend = []types.AgentEvent{{
+		Type:    "message.part.updated",
+		Payload: map[string]interface{}{"text": planText},
+	}}
+	runner1.PerStageDoneError = map[types.Stage]error{
+		types.StageVerify: errors.New(verifyFailure),
+	}
+
+	orch1 := New(cfg, tracker, NewMockWorkspace(), runner1)
+	events1 := NewEventCollector(orch1.Events)
+
+	orch1.poll()
+	if !events1.WaitFor(EventIssueRetrying, 2*time.Second) {
+		t.Fatal("expected first orchestrator to queue retry")
+	}
+
+	persisted, err := tracker.GetIssue("CB-1")
+	if err != nil {
+		t.Fatalf("GetIssue after retry queue: %v", err)
+	}
+	if persisted.State != types.StateRetryQueued {
+		t.Fatalf("persisted state = %v, want retry_queued", persisted.State)
+	}
+	if persisted.RetryStage != types.StageExecute {
+		t.Fatalf("persisted retry stage = %v, want execute", persisted.RetryStage)
+	}
+	if !strings.Contains(persisted.Feedback, verifyFailure) {
+		t.Fatalf("persisted feedback = %q, want to contain %q", persisted.Feedback, verifyFailure)
+	}
+	if !strings.Contains(persisted.Plan, planText) {
+		t.Fatalf("persisted plan = %q, want to contain %q", persisted.Plan, planText)
+	}
+
+	// Simulate restart: new orchestrator with empty in-memory backoff.
+	time.Sleep(30 * time.Millisecond)
+	runner2 := NewMockAgentRunner()
+	orch2 := New(cfg, tracker, NewMockWorkspace(), runner2)
+	events2 := NewEventCollector(orch2.Events)
+
+	orch2.dispatchReady()
+	time.Sleep(300 * time.Millisecond)
+
+	if got := runner2.StartCallCount(); got != 2 {
+		t.Fatalf("StartCallCount = %d, want 2 (execute + verify)", got)
+	}
+	if len(runner2.Prompts) < 2 {
+		t.Fatalf("expected 2 prompts after resume, got %d", len(runner2.Prompts))
+	}
+	if !strings.Contains(runner2.Prompts[0], planText) {
+		t.Fatalf("resume execute prompt missing plan: %s", runner2.Prompts[0])
+	}
+	if !strings.Contains(runner2.Prompts[0], verifyFailure) {
+		t.Fatalf("resume execute prompt missing feedback: %s", runner2.Prompts[0])
+	}
+	// Verify prompt is simplified and no longer includes the plan.
+	if !events2.WaitFor(EventIssueReadyForReview, time.Second) {
+		t.Fatal("expected resumed retry to reach review")
+	}
+	if got := tracker.UpdateState["CB-1"]; got != types.StateInReview {
+		t.Fatalf("issue state = %v, want in_review", got)
+	}
+}
+
+// TestOrchestrator_PlanInjectedIntoExecuteAndVerify ensures the plan stage's
+// output is fed to the execute and verify prompts so stages don't work in
+// isolation.
+func TestOrchestrator_PlanInjectedIntoExecuteAndVerify(t *testing.T) {
+	cfg := testConfig()
+
+	const planText = "Change file handler.go: wrap processPayment in a defer-recover block and log errors"
+
+	tracker := NewMockTracker([]types.Issue{makeTestIssue("CB-1", "Add error handling")})
+	runner := NewMockAgentRunner()
+	runner.EventsToSend = []types.AgentEvent{{
+		Type:    "message.part.updated",
+		Payload: map[string]interface{}{"text": planText},
+	}}
+	ws := NewMockWorkspace()
+
+	orch := New(cfg, tracker, ws, runner)
+	events := NewEventCollector(orch.Events)
+
+	orch.poll()
+	time.Sleep(300 * time.Millisecond)
+
+	if !events.Has(EventIssueReadyForReview) {
+		t.Fatal("expected pipeline to reach review")
+	}
+
+	// Plan must appear in execute prompt (Prompts[1] = plan, execute, verify)
+	if len(runner.Prompts) < 3 {
+		t.Fatalf("expected 3 prompts, got %d", len(runner.Prompts))
+	}
+	execPrompt := runner.Prompts[1]
+	if !strings.Contains(execPrompt, planText) {
+		t.Errorf("execute prompt should contain plan text\ngot: %s", execPrompt)
+	}
+	if !strings.Contains(execPrompt, "Implementation plan to follow:") {
+		t.Error("execute prompt should have plan header")
+	}
+
+	// Verify prompt is simplified — just checks task satisfaction with JSON result.
+	verifyPrompt := runner.Prompts[2]
+	if !strings.Contains(verifyPrompt, "Check if the code changes satisfy") {
+		t.Errorf("verify prompt should contain check instruction\ngot: %s", verifyPrompt)
+	}
+	if !strings.Contains(verifyPrompt, "JSON object") {
+		t.Error("verify prompt should require JSON result")
 	}
 }
 

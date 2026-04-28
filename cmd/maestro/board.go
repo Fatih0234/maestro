@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
@@ -16,7 +17,7 @@ import (
 
 func runBoardCommand(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: maestro board <command> [args]\n\nCommands:\n  create  Create a new issue\n  list    List issues by state\n  show    Show issue details\n  approve Approve an issue\n  reject  Reject an issue\n  retry   Retry an issue")
+		return errors.New("usage: maestro board <command> [args]\n\nCommands:\n  create  Create a new issue\n  list    List issues by state\n  show    Show issue details\n  diff    Show worktree diff\n  approve Approve an issue\n  reject  Reject an issue\n  retry   Retry an issue")
 	}
 
 	cmd := args[0]
@@ -29,6 +30,8 @@ func runBoardCommand(args []string) error {
 		return boardList(cmdArgs)
 	case "show":
 		return boardShow(cmdArgs)
+	case "diff":
+		return boardDiff(cmdArgs)
 	case "approve":
 		return boardApprove(cmdArgs)
 	case "reject":
@@ -161,6 +164,28 @@ func boardShow(args []string) error {
 	fmt.Printf("Issue: %s\n", issue.ID)
 	fmt.Printf("Title: %s\n", issue.Title)
 	fmt.Printf("State: %s\n", issue.State.BoardState())
+
+	if issue.Description != "" {
+		fmt.Printf("Description: %s\n", issue.Description)
+	}
+	if len(issue.Labels) > 0 {
+		fmt.Printf("Labels: %s\n", strings.Join(issue.Labels, ", "))
+	}
+	if issue.Feedback != "" {
+		fmt.Printf("Feedback: %s\n", issue.Feedback)
+	}
+	if issue.Plan != "" {
+		fmt.Printf("Plan: %s\n", issue.Plan)
+	}
+	if issue.RetryAttempt > 0 {
+		fmt.Printf("RetryAttempt: %d\n", issue.RetryAttempt)
+	}
+	if issue.RetryStage != "" {
+		fmt.Printf("RetryStage: %s\n", issue.RetryStage)
+	}
+	if issue.RetryAfter != nil {
+		fmt.Printf("RetryAfter: %s\n", issue.RetryAfter.Format(time.RFC3339))
+	}
 
 	summary, summaryErr := recorder.LoadIssueSummary(issue.ID)
 	if summaryErr == nil {
@@ -349,6 +374,13 @@ func boardReject(args []string) error {
 		return fmt.Errorf("loading attempt recorder: %w", err)
 	}
 
+	// Persist human feedback so the agent sees it on retry.
+	if *message != "" {
+		if _, err := tr.SetFeedback(issue.ID, *message); err != nil {
+			return fmt.Errorf("setting feedback: %w", err)
+		}
+	}
+
 	// Update tracker state first so we never write a decision artifact
 	// without the tracker reflecting the transition.
 	if _, err := tr.UpdateIssueState(issue.ID, types.StateUnclaimed); err != nil {
@@ -416,6 +448,35 @@ func boardRetry(args []string) error {
 
 	fmt.Printf("Retry queued %s -> todo\n", issueID)
 	return nil
+}
+
+// boardDiff shows the git diff for an issue's workspace.
+func boardDiff(args []string) error {
+	if len(args) < 1 {
+		return errors.New("usage: maestro board diff <issue-id>")
+	}
+	issueID := args[0]
+
+	_, tr, wsMgr, recorder, err := buildDeps(*configPath)
+	if err != nil {
+		return err
+	}
+	defer recorder.Close()
+
+	_, err = tr.GetIssue(issueID)
+	if err != nil {
+		return err
+	}
+
+	wsPath := wsMgr.Path(issueID)
+	if wsPath == "" {
+		return fmt.Errorf("no workspace found for %s", issueID)
+	}
+
+	cmd := exec.Command("git", "-C", wsPath, "diff", "HEAD")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // humanDuration formats a duration in a human-readable way.

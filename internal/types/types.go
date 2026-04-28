@@ -94,17 +94,21 @@ type Issue struct {
 	RetryAfter   *time.Time `json:"retry_after,omitempty"` // When to retry (for retry_queued state)
 	RetryAttempt int        `json:"retry_attempt,omitempty"`
 	RetryStage   Stage      `json:"retry_stage,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"` // When issue was created
-	UpdatedAt    time.Time  `json:"updated_at"` // Last modification
+	Feedback     string     `json:"feedback,omitempty"` // Failure context from previous stage for retry
+	Plan         string     `json:"plan,omitempty"`     // Plan from the plan stage, fed to execute and verify
+	CreatedAt    time.Time  `json:"created_at"`         // When issue was created
+	UpdatedAt    time.Time  `json:"updated_at"`         // Last modification
 }
 
 // BackoffEntry represents a queued retry for a failed issue.
 type BackoffEntry struct {
-	IssueID string    // Which issue to retry
-	Attempt int       // Which attempt number this retry represents
-	Stage   Stage     // Which stage to resume from
-	RetryAt time.Time // When to retry (calculated from backoff strategy)
-	Error   string    // What went wrong last time
+	IssueID  string    // Which issue to retry
+	Attempt  int       // Which attempt number this retry represents
+	Stage    Stage     // Which stage to resume from
+	RetryAt  time.Time // When to retry (calculated from backoff strategy)
+	Error    string    // What went wrong last time
+	Feedback string    // Context to pass into the next execution attempt
+	Plan     string    // Latest implementation plan to preserve across retries
 }
 
 // AgentRunner is the interface for starting/stopping agent processes.
@@ -149,9 +153,12 @@ type IssueTracker interface {
 	GetIssue(id string) (Issue, error)
 	// UpdateIssueState updates an issue's state
 	UpdateIssueState(id string, state IssueState) (Issue, error)
-	// SetRetryQueue marks an issue as waiting for retry. Not all trackers
+	// SetFeedback updates the human review feedback for an issue.
+	SetFeedback(id string, feedback string) (Issue, error)
+	// SetRetryQueue marks an issue as waiting for retry and persists retry
+	// context needed by resumed retries (feedback + plan). Not all trackers
 	// may support this; those that don't should return an error.
-	SetRetryQueue(id string, retryAt time.Time, attempt int, stage Stage) (Issue, error)
+	SetRetryQueue(id string, retryAt time.Time, attempt int, stage Stage, feedback, plan string) (Issue, error)
 	// ListAllIssues returns all known issues regardless of state.
 	// For remote trackers this may be limited to open/non-archived issues.
 	ListAllIssues() ([]Issue, error)

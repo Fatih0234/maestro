@@ -90,6 +90,9 @@ func (o *Orchestrator) Run() error {
 		return o.shutdown()
 	}
 
+	// Release any issues stuck in_progress from a previous crashed run.
+	o.releaseStuckIssues()
+
 	// Run initial poll
 	o.poll()
 
@@ -197,17 +200,17 @@ func (o *Orchestrator) handleTimeout(run RunState, elapsed time.Duration) {
 
 	// Enqueue backoff
 	attempt := run.Attempt + 1
-	entry := o.Backoff.Enqueue(issueID, attempt, run.Stage, fmt.Sprintf("timeout after %v", elapsed))
-	o.persistRetryQueue(entry)
+	errMsg := fmt.Sprintf("timeout after %v", elapsed)
+	entry := o.enqueueRetry(issueID, attempt, run.Stage, errMsg, errMsg, run.Issue.Plan)
 
-	o.finalizeAttempt(issueID, run.Attempt, "timed_out", &entry.RetryAt, fmt.Errorf("timeout after %v", elapsed))
+	o.finalizeAttempt(issueID, run.Attempt, "timed_out", &entry.RetryAt, errors.New(errMsg))
 
 	o.emit(EventBackoffQueued, issueID, BackoffPayload{
 		IssueID:     issueID,
 		Attempt:     attempt,
 		Stage:       run.Stage,
 		RetryAt:     entry.RetryAt,
-		Error:       fmt.Sprintf("timeout after %v", elapsed),
+		Error:       errMsg,
 		FailureKind: types.StageFailureTimeout,
 	})
 
@@ -252,17 +255,17 @@ func (o *Orchestrator) handleStall(run RunState, lastEventAge time.Duration) {
 
 	// Enqueue backoff
 	attempt := run.Attempt + 1
-	entry := o.Backoff.Enqueue(issueID, attempt, run.Stage, fmt.Sprintf("stall: no event for %v", lastEventAge))
-	o.persistRetryQueue(entry)
+	errMsg := fmt.Sprintf("stall: no event for %v", lastEventAge)
+	entry := o.enqueueRetry(issueID, attempt, run.Stage, errMsg, errMsg, run.Issue.Plan)
 
-	o.finalizeAttempt(issueID, run.Attempt, "stalled", &entry.RetryAt, fmt.Errorf("stall: no event for %v", lastEventAge))
+	o.finalizeAttempt(issueID, run.Attempt, "stalled", &entry.RetryAt, errors.New(errMsg))
 
 	o.emit(EventBackoffQueued, issueID, BackoffPayload{
 		IssueID:     issueID,
 		Attempt:     attempt,
 		Stage:       run.Stage,
 		RetryAt:     entry.RetryAt,
-		Error:       fmt.Sprintf("stall: no event for %v", lastEventAge),
+		Error:       errMsg,
 		FailureKind: types.StageFailureTimeout,
 	})
 
@@ -307,12 +310,41 @@ func (o *Orchestrator) dispatchBackoff() {
 			_ = o.Recorder.EnsureIssue(issue)
 		}
 
+		// Carry retry context forward from backoff metadata.
+		if entry.Plan != "" {
+			issue.Plan = entry.Plan
+		}
+		if entry.Feedback != "" {
+			issue.Feedback = entry.Feedback
+		} else if entry.Error != "" {
+			issue.Feedback = entry.Error
+		}
+
 		// Start the run (reuse workspace if exists), resuming from the failed stage.
 		startStage := entry.Stage
 		if startStage == "" {
 			startStage = types.StagePlan
 		}
 		o.startRun(issue, entry.Attempt, startStage)
+	}
+}
+
+// releaseStuckIssues finds any issues left in_progress from a crashed
+// orchestrator and releases them back to todo so they can be claimed again.
+func (o *Orchestrator) releaseStuckIssues() {
+	issues, err := o.Tracker.ListAllIssues()
+	if err != nil {
+		return
+	}
+	for _, issue := range issues {
+		if issue.State == types.StateRunning || issue.State == types.StateClaimed {
+			if _, err := o.Tracker.ReleaseIssue(issue.ID); err == nil {
+				o.emit(EventIssueReleased, issue.ID, map[string]interface{}{
+					"reason": "orchestrator_startup",
+					"previous_state": issue.State.String(),
+				})
+			}
+		}
 	}
 }
 
@@ -396,7 +428,15 @@ func (o *Orchestrator) dispatchReady() {
 			}
 		}
 
-		o.startRun(claimed, attempt, startStage)
+		runIssue := claimed
+		if runIssue.Plan == "" {
+			runIssue.Plan = issue.Plan
+		}
+		if runIssue.Feedback == "" {
+			runIssue.Feedback = issue.Feedback
+		}
+
+		o.startRun(runIssue, attempt, startStage)
 	}
 }
 
@@ -544,8 +584,8 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				o.State.Remove(issueID)
 
 				nextAttempt := attempt + 1
-				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, fmt.Sprintf("context cancelled before %s: %v", stage, err))
-				o.persistRetryQueue(entry)
+				errMsg := fmt.Sprintf("context cancelled before %s: %v", stage, err)
+				entry := o.enqueueRetry(issueID, nextAttempt, stage, errMsg, errMsg, issue.Plan)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
 				o.emit(EventStageFailed, issueID, StagePayload{
@@ -565,7 +605,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 					Attempt:     nextAttempt,
 					Stage:       stage,
 					RetryAt:     entry.RetryAt,
-					Error:       err.Error(),
+					Error:       errMsg,
 					FailureKind: types.StageFailureTimeout,
 				})
 				o.emit(EventIssueRetrying, issueID, BackoffPayload{
@@ -573,7 +613,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 					Attempt:     nextAttempt,
 					Stage:       stage,
 					RetryAt:     entry.RetryAt,
-					Error:       err.Error(),
+					Error:       errMsg,
 					FailureKind: types.StageFailureTimeout,
 				})
 				return
@@ -618,8 +658,8 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				o.State.Remove(issueID)
 
 				nextAttempt := attempt + 1
-				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, fmt.Sprintf("stage %s failed: %v", stage, err))
-				o.persistRetryQueue(entry)
+				errMsg := fmt.Sprintf("stage %s failed: %v", stage, err)
+				entry := o.enqueueRetry(issueID, nextAttempt, stage, errMsg, errMsg, issue.Plan)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
 				o.emit(EventStageFailed, issueID, StagePayload{
@@ -639,7 +679,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 					Attempt:     nextAttempt,
 					Stage:       stage,
 					RetryAt:     entry.RetryAt,
-					Error:       fmt.Sprintf("stage %s failed: %v", stage, err),
+					Error:       errMsg,
 					FailureKind: o.classifyStageFailure(err, stage),
 				})
 				return
@@ -671,8 +711,14 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 
 				failureKind := o.classifyStageFailure(result.Error, stage)
 
-				entry := o.Backoff.Enqueue(issueID, nextAttempt, stage, errMsg)
-				o.persistRetryQueue(entry)
+				// When verify fails, loop back to execute so the agent can fix
+				// the issues the verifier found. Other stages retry themselves.
+				retryStage := stage
+				if stage == types.StageVerify {
+					retryStage = types.StageExecute
+				}
+
+				entry := o.enqueueRetry(issueID, nextAttempt, retryStage, errMsg, errMsg, issue.Plan)
 				o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, result.Error)
 
 				o.emit(EventStageFailed, issueID, StagePayload{
@@ -690,7 +736,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				o.emit(EventIssueRetrying, issueID, BackoffPayload{
 					IssueID:     issueID,
 					Attempt:     nextAttempt,
-					Stage:       stage,
+					Stage:       retryStage,
 					RetryAt:     entry.RetryAt,
 					Error:       errMsg,
 					FailureKind: failureKind,
@@ -699,6 +745,12 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 			}
 
 			// Stage succeeded.
+			if stage == types.StagePlan && result.StageOutput != "" {
+				issue.Plan = result.StageOutput
+				o.State.Mutate(issueID, func(r *RunState) {
+					r.Issue.Plan = result.StageOutput
+				})
+			}
 			o.emit(EventStageCompleted, issueID, StagePayload{
 				IssueID: issueID,
 				Stage:   stage,
@@ -733,8 +785,8 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 			o.State.Mutate(issueID, func(r *RunState) { r.Phase = types.PhaseFailed })
 			o.State.Remove(issueID)
 
-			entry := o.Backoff.Enqueue(issueID, nextAttempt, types.StagePlan, fmt.Sprintf("review handoff failed: %v", err))
-			o.persistRetryQueue(entry)
+			errMsg := fmt.Sprintf("review handoff failed: %v", err)
+			entry := o.enqueueRetry(issueID, nextAttempt, types.StagePlan, errMsg, errMsg, issue.Plan)
 			o.finalizeAttempt(issueID, attempt, "retry_queued", &entry.RetryAt, err)
 
 			o.emit(EventAgentFinished, issueID, AgentResultPayload{
@@ -747,7 +799,7 @@ func (o *Orchestrator) startRun(issue types.Issue, attempt int, startStage types
 				Attempt:     nextAttempt,
 				Stage:       types.StagePlan,
 				RetryAt:     entry.RetryAt,
-				Error:       fmt.Sprintf("review handoff failed: %v", err),
+				Error:       errMsg,
 				FailureKind: o.classifyStageFailure(err, types.StagePlan),
 			})
 			return
@@ -779,16 +831,29 @@ func (o *Orchestrator) removeRunning(issueID string) {
 	o.mu.Unlock()
 }
 
-// persistRetryQueue writes the retry timestamp to the tracker.
+// enqueueRetry stores retry metadata in memory and tracker persistence.
+func (o *Orchestrator) enqueueRetry(issueID string, attempt int, stage types.Stage, errorMsg, feedback, plan string) *types.BackoffEntry {
+	entry := o.Backoff.Enqueue(issueID, attempt, stage, errorMsg)
+	entry.Feedback = feedback
+	entry.Plan = plan
+	o.persistRetryQueue(entry)
+	return entry
+}
+
+// persistRetryQueue writes retry scheduling + context metadata to the tracker.
 // This is best-effort: the in-memory backoff manager is the source of truth
 // for dispatch. If the tracker fails to persist (network error, disk full,
-// etc.), the retry still happens at the scheduled time but won't be visible
-// to external systems (e.g., no GitHub label/comment).
+// etc.), the retry still happens at the scheduled time but resumed retries
+// after a restart may miss context, and external systems won't see the update.
 func (o *Orchestrator) persistRetryQueue(entry *types.BackoffEntry) {
 	if entry == nil {
 		return
 	}
-	if _, err := o.Tracker.SetRetryQueue(entry.IssueID, entry.RetryAt, entry.Attempt, entry.Stage); err != nil {
+	feedback := entry.Feedback
+	if feedback == "" {
+		feedback = entry.Error
+	}
+	if _, err := o.Tracker.SetRetryQueue(entry.IssueID, entry.RetryAt, entry.Attempt, entry.Stage, feedback, entry.Plan); err != nil {
 		// Best-effort: log via event channel if space, otherwise swallow.
 		select {
 		case o.Events <- types.OrchestratorEvent{

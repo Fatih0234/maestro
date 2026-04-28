@@ -146,7 +146,7 @@ func (f *FakeRunner) runScript(ctx context.Context, sessionID string, stage type
 	}
 	if stage == types.StageVerify && err == nil {
 		select {
-		case events <- types.AgentEvent{Type: EventTypeMessageUpdated, Payload: map[string]interface{}{"text": `{"passed": true, "summary": "ok"}`}}:
+		case events <- types.AgentEvent{Type: EventTypeMessageUpdated, Payload: map[string]interface{}{"text": "\n{\"passed\": true, \"summary\": \"ok\"}"}}:
 		case <-ctx.Done():
 			done <- ctx.Err()
 			close(done)

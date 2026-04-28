@@ -54,6 +54,8 @@ type Issue struct {
 	RetryAfter   *time.Time `json:"retry_after,omitempty"` // When to retry (for retry_queued state)
 	RetryAttempt int        `json:"retry_attempt,omitempty"`
 	RetryStage   string     `json:"retry_stage,omitempty"`
+	Feedback     string     `json:"feedback,omitempty"`
+	Plan         string     `json:"plan,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
@@ -254,6 +256,9 @@ func (t *LocalTracker) ReleaseIssue(id string) (types.Issue, error) {
 
 	issue.State = StateTodo
 	issue.ClaimedBy = ""
+	issue.RetryAfter = nil
+	issue.RetryAttempt = 0
+	issue.RetryStage = ""
 	issue.UpdatedAt = time.Now().UTC()
 
 	if err := writeJSONAtomic(t.issuePath(id), issue); err != nil {
@@ -300,11 +305,16 @@ func (t *LocalTracker) UpdateIssueState(id string, state types.IssueState) (type
 	} else if issue.State != StateInProgress {
 		issue.ClaimedBy = ""
 	}
-	// Clear retry_after when leaving retry_queued state
+	// Clear retry metadata when leaving retry_queued state.
 	if state != types.StateRetryQueued {
 		issue.RetryAfter = nil
 		issue.RetryAttempt = 0
 		issue.RetryStage = ""
+	}
+	// Clear feedback/plan when work is completed or under review.
+	if state == types.StateInReview || state == types.StateReleased {
+		issue.Feedback = ""
+		issue.Plan = ""
 	}
 	issue.UpdatedAt = time.Now().UTC()
 
@@ -400,6 +410,8 @@ func (t *LocalTracker) toTypesIssue(issue Issue) types.Issue {
 		RetryAfter:   issue.RetryAfter,
 		RetryAttempt: issue.RetryAttempt,
 		RetryStage:   types.Stage(issue.RetryStage),
+		Feedback:     issue.Feedback,
+		Plan:         issue.Plan,
 		CreatedAt:    issue.CreatedAt,
 		UpdatedAt:    issue.UpdatedAt,
 	}
@@ -446,9 +458,31 @@ func (t *LocalTracker) ListAllIssues() ([]types.Issue, error) {
 	return issues, nil
 }
 
+// SetFeedback updates the human review feedback for an issue.
+func (t *LocalTracker) SetFeedback(id string, feedback string) (types.Issue, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if err := t.ensureBoardLocked(); err != nil {
+		return types.Issue{}, err
+	}
+
+	issue, err := t.loadIssueLocked(id)
+	if err != nil {
+		return types.Issue{}, err
+	}
+
+	issue.Feedback = feedback
+	issue.UpdatedAt = time.Now().UTC()
+	if err := writeJSONAtomic(t.issuePath(id), issue); err != nil {
+		return types.Issue{}, err
+	}
+	return t.toTypesIssue(issue), nil
+}
+
 // SetRetryQueue marks an issue as retry_queued with a retry_after timestamp.
 // This is the preferred way to queue an issue for retry instead of using UpdateIssueState.
-func (t *LocalTracker) SetRetryQueue(id string, retryAt time.Time, attempt int, stage types.Stage) (types.Issue, error) {
+func (t *LocalTracker) SetRetryQueue(id string, retryAt time.Time, attempt int, stage types.Stage, feedback, plan string) (types.Issue, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -465,6 +499,8 @@ func (t *LocalTracker) SetRetryQueue(id string, retryAt time.Time, attempt int, 
 	issue.RetryAfter = &retryAt
 	issue.RetryAttempt = attempt
 	issue.RetryStage = stage.String()
+	issue.Feedback = feedback
+	issue.Plan = plan
 	issue.ClaimedBy = ""
 	issue.UpdatedAt = time.Now().UTC()
 

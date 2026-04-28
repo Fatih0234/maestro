@@ -91,7 +91,7 @@ func (m *MockAgentRunner) Start(ctx context.Context, issue types.Issue, workspac
 			}
 		}
 		if stage == types.StageVerify && doneErr == nil {
-			events <- types.AgentEvent{Type: "message.part.updated", Payload: map[string]interface{}{"text": `{"passed": true, "summary": "ok"}`}}
+			events <- types.AgentEvent{Type: "message.part.updated", Payload: map[string]interface{}{"text": "\n{\"passed\": true, \"summary\": \"ok\"}"}}
 		}
 		// Send done with configured error (nil for success, error for failure)
 		// before closing events so the pipeline monitor always sees the error.
@@ -271,6 +271,21 @@ func (m *MockTracker) GetIssue(id string) (types.Issue, error) {
 	return issue, nil
 }
 
+// SetFeedback implements IssueTracker.SetFeedback
+func (m *MockTracker) SetFeedback(id string, feedback string) (types.Issue, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	issue, ok := m.issues[id]
+	if !ok {
+		return types.Issue{}, errors.New("issue not found")
+	}
+
+	issue.Feedback = feedback
+	m.issues[id] = issue
+	return issue, nil
+}
+
 // UpdateIssueState implements IssueTracker.UpdateIssueState
 func (m *MockTracker) UpdateIssueState(id string, state types.IssueState) (types.Issue, error) {
 	m.mu.Lock()
@@ -287,6 +302,15 @@ func (m *MockTracker) UpdateIssueState(id string, state types.IssueState) (types
 	}
 
 	issue.State = state
+	if state != types.StateRetryQueued {
+		issue.RetryAfter = nil
+		issue.RetryAttempt = 0
+		issue.RetryStage = ""
+	}
+	if state == types.StateInReview || state == types.StateReleased {
+		issue.Feedback = ""
+		issue.Plan = ""
+	}
 	m.issues[id] = issue
 	m.UpdateState[id] = state
 
@@ -294,7 +318,7 @@ func (m *MockTracker) UpdateIssueState(id string, state types.IssueState) (types
 }
 
 // SetRetryQueue implements IssueTracker.SetRetryQueue
-func (m *MockTracker) SetRetryQueue(id string, retryAt time.Time, attempt int, stage types.Stage) (types.Issue, error) {
+func (m *MockTracker) SetRetryQueue(id string, retryAt time.Time, attempt int, stage types.Stage, feedback, plan string) (types.Issue, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -309,6 +333,8 @@ func (m *MockTracker) SetRetryQueue(id string, retryAt time.Time, attempt int, s
 	issue.RetryAfter = &retryAt
 	issue.RetryAttempt = attempt
 	issue.RetryStage = stage
+	issue.Feedback = feedback
+	issue.Plan = plan
 	m.issues[id] = issue
 
 	return issue, nil

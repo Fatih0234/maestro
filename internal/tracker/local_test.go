@@ -456,7 +456,7 @@ func TestLocalTracker_RetryQueuedState(t *testing.T) {
 
 	// Set as retry queued with a future time
 	futureTime := time.Now().Add(1 * time.Hour)
-	updated, err := tracker.SetRetryQueue(issue.ID, futureTime, 2, types.StageExecute)
+	updated, err := tracker.SetRetryQueue(issue.ID, futureTime, 2, types.StageExecute, "", "")
 	if err != nil {
 		t.Fatalf("SetRetryQueue failed: %v", err)
 	}
@@ -476,7 +476,7 @@ func TestLocalTracker_RetryQueuedState(t *testing.T) {
 
 	// Set as retry queued with a past time
 	pastTime := time.Now().Add(-1 * time.Hour)
-	updated, err = tracker.SetRetryQueue(issue.ID, pastTime, 2, types.StageExecute)
+	updated, err = tracker.SetRetryQueue(issue.ID, pastTime, 2, types.StageExecute, "", "")
 	if err != nil {
 		t.Fatalf("SetRetryQueue failed: %v", err)
 	}
@@ -526,7 +526,9 @@ func TestLocalTracker_SetRetryQueue(t *testing.T) {
 
 	// Set as retry queued
 	retryTime := time.Now().Add(30 * time.Second)
-	requeued, err := tracker.SetRetryQueue(issue.ID, retryTime, 2, types.StageExecute)
+	feedback := "verification failed: missing edge-case test"
+	plan := "1. Update parser.go\n2. Add regression test"
+	requeued, err := tracker.SetRetryQueue(issue.ID, retryTime, 2, types.StageExecute, feedback, plan)
 	if err != nil {
 		t.Fatalf("SetRetryQueue failed: %v", err)
 	}
@@ -544,6 +546,12 @@ func TestLocalTracker_SetRetryQueue(t *testing.T) {
 	}
 	if requeued.RetryStage != types.StageExecute {
 		t.Fatalf("RetryStage = %v, want execute", requeued.RetryStage)
+	}
+	if requeued.Feedback != feedback {
+		t.Fatalf("Feedback = %q, want %q", requeued.Feedback, feedback)
+	}
+	if requeued.Plan != plan {
+		t.Fatalf("Plan = %q, want %q", requeued.Plan, plan)
 	}
 
 	// Time should be approximately correct (within 1 second)
@@ -564,6 +572,12 @@ func TestLocalTracker_SetRetryQueue(t *testing.T) {
 	if fetched.State != types.StateRetryQueued {
 		t.Errorf("expected persisted state retry_queued, got %v", fetched.State)
 	}
+	if fetched.Feedback != feedback {
+		t.Errorf("fetched Feedback = %q, want %q", fetched.Feedback, feedback)
+	}
+	if fetched.Plan != plan {
+		t.Errorf("fetched Plan = %q, want %q", fetched.Plan, plan)
+	}
 }
 
 func TestLocalTracker_UpdateIssueState_ClearsRetryAfter(t *testing.T) {
@@ -580,7 +594,7 @@ func TestLocalTracker_UpdateIssueState_ClearsRetryAfter(t *testing.T) {
 	}
 
 	retryTime := time.Now().Add(1 * time.Hour)
-	_, err = tracker.SetRetryQueue(issue.ID, retryTime, 2, types.StageExecute)
+	_, err = tracker.SetRetryQueue(issue.ID, retryTime, 2, types.StageExecute, "verify failed", "keep this plan")
 	if err != nil {
 		t.Fatalf("SetRetryQueue failed: %v", err)
 	}
@@ -599,6 +613,18 @@ func TestLocalTracker_UpdateIssueState_ClearsRetryAfter(t *testing.T) {
 
 	if fetched.RetryAfter != nil {
 		t.Error("expected RetryAfter to be cleared after state change")
+	}
+	if fetched.RetryAttempt != 0 {
+		t.Errorf("RetryAttempt = %d, want 0", fetched.RetryAttempt)
+	}
+	if fetched.RetryStage != "" {
+		t.Errorf("RetryStage = %q, want empty", fetched.RetryStage)
+	}
+	if fetched.Feedback != "" {
+		t.Errorf("Feedback = %q, want empty", fetched.Feedback)
+	}
+	if fetched.Plan != "" {
+		t.Errorf("Plan = %q, want empty", fetched.Plan)
 	}
 }
 
@@ -652,7 +678,7 @@ func TestLocalTracker_UpdateIssueState_InReviewClearsClaimAndRetryAfter(t *testi
 		t.Fatalf("ClaimIssue failed: %v", err)
 	}
 	retryAt := time.Now().Add(time.Hour)
-	if _, err := tracker.SetRetryQueue(issue.ID, retryAt, 2, types.StageExecute); err != nil {
+	if _, err := tracker.SetRetryQueue(issue.ID, retryAt, 2, types.StageExecute, "", ""); err != nil {
 		t.Fatalf("SetRetryQueue failed: %v", err)
 	}
 
@@ -677,6 +703,12 @@ func TestLocalTracker_UpdateIssueState_InReviewClearsClaimAndRetryAfter(t *testi
 	}
 	if stored.RetryAfter != nil {
 		t.Fatal("retry_after should be cleared when entering in_review")
+	}
+	if stored.Feedback != "" {
+		t.Fatalf("feedback = %q, want empty", stored.Feedback)
+	}
+	if stored.Plan != "" {
+		t.Fatalf("plan = %q, want empty", stored.Plan)
 	}
 }
 

@@ -184,11 +184,11 @@ func TestRunner_BuildStagePrompt(t *testing.T) {
 	}
 
 	verify := runner.buildStagePrompt(issue, types.StageVerify)
-	if !strings.Contains(verify, "VERIFICATION mode") {
-		t.Errorf("verify prompt missing VERIFICATION mode header")
+	if !strings.Contains(verify, "Check if the code changes satisfy") {
+		t.Errorf("verify prompt missing check instruction")
 	}
-	if !strings.Contains(verify, "pass/fail assessment") {
-		t.Errorf("verify prompt missing reviewer instruction")
+	if !strings.Contains(verify, "JSON object") {
+		t.Errorf("verify prompt missing JSON requirement")
 	}
 
 	// Unknown stage falls back to base prompt

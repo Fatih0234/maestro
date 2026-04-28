@@ -324,7 +324,7 @@ func TestBoardRetry_MovesRetryQueuedToTodo(t *testing.T) {
 		t.Fatalf("UpdateIssueState: %v", err)
 	}
 	// Set retry_after in the past so it's eligible.
-	tr.SetRetryQueue(issue.ID, time.Now().Add(-time.Hour), 2, types.StageExecute)
+	tr.SetRetryQueue(issue.ID, time.Now().Add(-time.Hour), 2, types.StageExecute, "", "")
 
 	oldConfigPath := *configPath
 	*configPath = filepath.Join(tmpDir, "WORKFLOW.md")

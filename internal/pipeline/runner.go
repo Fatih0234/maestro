@@ -63,6 +63,7 @@ type Result struct {
 	Stage               types.Stage
 	Success             bool
 	Error               error
+	StageOutput         string // Full agent response text (plan, implementation, verification result)
 	WorkspacePath       string
 	Branch              string
 	FinalCommit         string
@@ -182,7 +183,7 @@ monitor:
 					Payload:   map[string]int64{"tokens_in": ti, "tokens_out": to},
 				})
 			}
-			if event.Type == agent.EventTypeMessageUpdated {
+			if event.Type == agent.EventTypeMessageUpdated || event.Type == agent.EventTypeMessageDelta {
 				if text := agent.ExtractTextContent(event); text != "" {
 					responseText.WriteString(text)
 					emit(types.OrchestratorEvent{
@@ -215,7 +216,7 @@ monitor:
 						tokensIn += ti
 						tokensOut += to
 					}
-					if event.Type == agent.EventTypeMessageUpdated {
+					if event.Type == agent.EventTypeMessageUpdated || event.Type == agent.EventTypeMessageDelta {
 						responseText.WriteString(agent.ExtractTextContent(event))
 					}
 					if stageRecorder != nil {
@@ -277,6 +278,7 @@ monitor:
 		Stage:               stage,
 		Success:             runErr == nil,
 		Error:               runErr,
+		StageOutput:         responseText.String(),
 		WorkspacePath:       workspacePath,
 		Branch:              branchName,
 		FinalCommit:         finalCommit,
@@ -311,30 +313,42 @@ Your plan should include:
 Do NOT make any code changes yet.`, base)
 
 	case types.StageExecute:
-		return fmt.Sprintf(`You are in EXECUTION mode. Implement the following task.
+		prompt := fmt.Sprintf(`You are in EXECUTION mode. Implement the following task.
 
-%s
+%s`, base)
+		if issue.Plan != "" {
+			prompt += fmt.Sprintf(`
+
+Implementation plan to follow:
+
+%s`, issue.Plan)
+		}
+		prompt += `
 
 Make the necessary code changes to fulfill the requirements.
 
-Do NOT run any git commands (do not commit, stage, or modify git state).`, base)
+Do NOT run any git commands (do not commit, stage, or modify git state).`
+		if issue.Feedback != "" {
+			prompt += fmt.Sprintf(`
 
-	case types.StageVerify:
-		return fmt.Sprintf(`You are in VERIFICATION mode. Review the implementation against the requirements.
+IMPORTANT: Your previous attempt was reviewed and the following issues were found:
 
 %s
 
-Verify that:
-- The changes satisfy the issue
-- Tests pass (if applicable)
-- No unintended side effects were introduced
+Address these specific issues in this attempt.`, issue.Feedback)
+		}
+		return prompt
 
-Provide a pass/fail assessment with evidence.
+	case types.StageVerify:
+		prompt := fmt.Sprintf(`Check if the code changes satisfy this task.
 
-End your response with exactly one machine-readable JSON object on its own line:
-{"passed": true, "summary": "evidence for the decision"}
+Task:
+%s`, base)
+		prompt += `
 
-Set "passed" to false if requirements are not met or tests fail.`, base)
+Respond with ONLY this JSON object on its own line:
+{"passed": true, "summary": "brief reason"}`
+		return prompt
 
 	default:
 		return base
