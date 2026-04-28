@@ -344,6 +344,13 @@ Address these specific issues in this attempt.`, issue.Feedback)
 
 Task:
 %s`, base)
+		if issue.Feedback != "" {
+			prompt += fmt.Sprintf(`
+
+The previous run was rejected with this feedback — verify these specific issues are fixed:
+
+%s`, issue.Feedback)
+		}
 		prompt += `
 
 Respond with ONLY this JSON object on its own line:
@@ -378,15 +385,40 @@ func parseVerificationResult(text string) error {
 		return fmt.Errorf("%w: missing JSON result", ErrVerificationResult)
 	}
 
-	for _, line := range strings.Split(trimmed, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
+	// Collect positions of every '{' and try each one (first to last) as a
+	// potential JSON result. Iterating first-to-last means the earliest
+	// valid verification JSON wins, matching the old line-by-line behavior.
+	var positions []int
+	for i, ch := range trimmed {
+		if ch == '{' {
+			positions = append(positions, i)
+		}
+	}
+
+	for _, pos := range positions {
+		candidate := trimmed[pos:]
+
+		// First pass: decode into a generic map so we can check for the
+		// "passed" key without accidentally accepting unrelated JSON like
+		// {"key": "val"} from code snippets in the response.
+		// Using json.Decoder instead of json.Unmarshal so trailing text
+		// after the JSON object is silently ignored.
+		dec := json.NewDecoder(strings.NewReader(candidate))
+		var raw map[string]interface{}
+		if err := dec.Decode(&raw); err != nil {
 			continue
 		}
+		if _, ok := raw["passed"]; !ok {
+			continue
+		}
+
+		// Second pass: decode into our typed struct.
+		dec2 := json.NewDecoder(strings.NewReader(candidate))
 		var result verificationResult
-		if err := json.Unmarshal([]byte(line), &result); err != nil {
+		if err := dec2.Decode(&result); err != nil {
 			return fmt.Errorf("%w: invalid JSON result: %w", ErrVerificationResult, err)
 		}
+
 		if !result.Passed {
 			if strings.TrimSpace(result.Summary) == "" {
 				return fmt.Errorf("%w: verification reported passed=false", ErrVerificationFailed)
